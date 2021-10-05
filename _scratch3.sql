@@ -1,4 +1,5 @@
 SELECT * FROM data_mart_internal_reporting.ir_sh_cb_customer WHERE customer_id = '26113805';
+
 SELECT * FROM data_mart_internal_reporting.ir_sh_cb_subscription WHERE customer_id = '26113805';
 
 
