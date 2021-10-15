@@ -1,6 +1,25 @@
 SELECT * FROM data_mart_internal_reporting.ir_sh_cb_customer WHERE customer_id = '26113805';
 
-SELECT * FROM data_mart_internal_reporting.ir_sh_cb_subscription WHERE customer_id = '26113805';
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_invoice_line WHERE customer_id = 'K58126111';
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_subscription WHERE customer_id = 'K58126111';
+
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_invoice_line WHERE plan_id = '1db52694-baee-45fb-902f-8de7293621fe';
+SELECT * FROM dwh_main.dim_cb_customer WHERE cb_cust_cf_kundennummer is NOT null;
+SELECT * FROM data_mart_internal_reporting.test_ir_m_investor_report WHERE customer_id in ('94963619','169ldVSkbP3oXCYnH');
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_customer WHERE customer_id in ('94963619','169ldVSkbP3oXCYnH');
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_subscription WHERE customer_id in ('94963619','169ldVSkbP3oXCYnH');
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_invoice_line WHERE customer_id in ('94963619','169ldVSkbP3oXCYnH');
+SELECT * FROM data_mart_internal_reporting.ir_sh_cb_customer WHERE customer_id = 'K76310569';
+SELECT * FROM dwh_main.map_customer_to_foxbox_domain WHERE map_customer_id IN ('169ldVSkbP3oXCYnH','94963619')
+
+SELECT m1.product_name, m2.product_name
+FROM dwh_main.umd_product_map m1
+left JOIN (SELECT product_name FROM dwh_main.umd_product_map WHERE product_name LIKE '%3_jährige Laufzeit%') m2
+    ON m1.product_name = m2.product_name
+WHERE m1.product_name LIKE '%3_jährige %'
+
+
+
 
 
 WITH cte_domains AS (
@@ -118,3 +137,23 @@ FROM cte_domains c1
 GROUP BY c1.map_principal_main_domain, c1.date_key, mds.match_to_contract
 ORDER BY c1.map_principal_main_domain, c1.date_key
 ;
+
+SELECT 'Shop' as source_system, date_key, product_group
+FROM dwh_main.dim_date
+         FULL OUTER JOIN (SELECT DISTINCT
+                              CASE WHEN product_group LIKE 'Logbook%' THEN 'Logbook' ELSE product_group END AS product_group
+                          FROM data_mart_internal_reporting.ir_sh_cb_invoice_line upm) prod ON 1 = 1
+WHERE date_key BETWEEN '2019-01-01' AND current_date
+
+UNION ALL
+
+SELECT 'Chargebee' as source_system, date_key, product_group
+FROM dwh_main.dim_date
+         FULL OUTER JOIN (SELECT DISTINCT
+                              CASE WHEN product_group LIKE 'Logbook%' THEN 'Logbook' ELSE product_group END AS product_group
+                          FROM data_mart_internal_reporting.ir_sh_cb_invoice_line upm) prod ON 1 = 1
+WHERE date_key BETWEEN '2019-01-01' AND current_date;
+
+SELECT product_group FROM data_mart_internal_reporting.ir_sh_cb_invoice_line GROUP BY 1;
+SELECT cb_subscr_id ,cb_subscr_cancelled_ts, cb_subscr_current_term_end_ts FROM dwh_main.dim_cb_subscription WHERE cb_subscr_cancelled_ts is not null;
+SELECT cb_event_type FROM dwh_main.dim_cb_event GROUP BY 1
