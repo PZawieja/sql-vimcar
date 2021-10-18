@@ -251,3 +251,15 @@ FROM data_mart_internal_reporting.ir_sh_cb_invoice_line i
          JOIN data_mart_internal_reporting.ir_sh_cb_customer c
               ON c.customer_id = s.customer_id
 WHERE i.invoice_status <> 'voided'
+;
+
+------------------------------------------------------------------------------------------------------------
+-- PRODUCT AND FEATURES:
+-- Main tables: dim_v_dom_configuration  /  dim_v_dom_setting
+SELECT
+    c.*
+FROM dwh_main.dim_v_dom_configuration c
+         JOIN dwh_main.dim_v_dom_domain d
+              ON c.domain_name = d.domain_name
+WHERE d.domain_is_test = FALSE
+-- AND route_tracking = TRUE -- route documentation / route tracking
