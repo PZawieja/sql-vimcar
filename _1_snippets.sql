@@ -236,10 +236,11 @@ SELECT i.customer_id
      , c.max_subscription_cancelled_dt
      , i.product_group
      , CASE
+         -- only invoices started in the past or today, the ones ending today are EXCLUDED  
            WHEN invoice_provisioning_start_dt <= CURRENT_DATE AND
                 invoice_provisioning_end_dt > CURRENT_DATE
                THEN mrr_eur - refund_mrr_eur
-    END AS mrr_eur_after_refund
+        END AS mrr_eur_after_refund
      , CASE
            WHEN invoice_provisioning_start_dt <= CURRENT_DATE AND
                 invoice_provisioning_end_dt > CURRENT_DATE
@@ -251,6 +252,9 @@ FROM data_mart_internal_reporting.ir_sh_cb_invoice_line i
          JOIN data_mart_internal_reporting.ir_sh_cb_customer c
               ON c.customer_id = s.customer_id
 WHERE i.invoice_status <> 'voided'
+--   AND i.product_group <> 'Hardware'
+--   AND i.full_refund_flag = FALSE
+  AND ((invoice_provisioning_start_dt <= CURRENT_DATE AND invoice_provisioning_end_dt > CURRENT_DATE) OR invoice_provisioning_start_dt < CURRENT_DATE AND invoice_provisioning_end_dt >= CURRENT_DATE) -- condition to retrieve also the invoices ending today
 ;
 
 ------------------------------------------------------------------------------------------------------------
@@ -262,4 +266,8 @@ FROM dwh_main.dim_v_dom_configuration c
          JOIN dwh_main.dim_v_dom_domain d
               ON c.domain_name = d.domain_name
 WHERE d.domain_is_test = FALSE
+  AND d.domain_name NOT IN (
+      'com.vimcar.clients'
+    , 'com.vimcar.clients.vimcar'
+    , 'com.vimcar')
 -- AND route_tracking = TRUE -- route documentation / route tracking
