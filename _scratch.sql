@@ -1,110 +1,109 @@
--- NEW contracts which started in Jan-2021 and Jan-2020:
-WITH customers AS (SELECT c.customer_id
-                        , CASE WHEN c.customer_is_fleet = TRUE THEN 'B2B' ELSE 'B2C' END AS customer_type
-                        , c.min_subscription_start_dt AS customer_first_subscription_start_dt
-                        , s.subscription_id
-                        , s.subscription_status
-                        , s.subscription_start_dt
-                        , s.subscription_end_dt
-                        , c.customer_current_mrr_eur
-                   FROM data_mart_internal_reporting.ir_sh_cb_subscription s
-                            JOIN data_mart_internal_reporting.ir_sh_cb_customer c
-                                 ON c.customer_id = s.customer_id
-                   WHERE TRUE
-                     AND c.invoice_only_in_shop = TRUE
-                     AND s.subscription_status = 'active'
---                         AND c.customer_is_fleet = FALSE
--- AND c.customer_id = 'K29368419'
+WITH domain_conf AS (
+    SELECT domain_name
+         , row_to_json((SELECT d FROM (SELECT address_visibility_delay
+                                            , logbook_visibility_delay_minutes
+                                            , logbook_for_pool_visible
+                                            , logbook_for_personal_visible
+                                            , trip_statistics
+                                            , private_mode_include_fleet_managers
+                                            , private_trip_locations
+                                            , show_car_type
+                                            , tax_pdf_timestamps
+                                            , tax_pdf_drivers
+                                            , csv_exports_trips
+                                            , general_pdf_trips
+                                            , contact_required
+                                            , dongle_information_required
+                                            , pregenerated_car_activation
+                                            , costs
+                                            , cost_rules
+                                            , costs_fleet
+                                            , contracts
+                                            , live_location
+                                            , route_tracking
+                                            , fencing
+                                            , fencing_personal
+                                            , logbook
+                                            , task_delegation
+                                            , tasks
+                                            , fuelcard_pins
+                                            , booking
+                                            , files
+                                            , custom_fields
+                                            , vin_decoding
+                                            , driver_license_check_lapid_manual
+                                            , driver_license_check_lapid_advanced
+                                            , travel_expenses
+                                            , cost_centers
+                                            , odometer_records
+                                            , key_management_witte_box
+                                            , default_driver
+                                            , tires
+                                            , administrators
+                                            , privacy_settings
+                                            , driver_instructions_lapid
+                                            , groups
+                                            , co2_reporting
+                                            , damage_management
+                                            , username_prefix
+                                            , custom_usernames
+                                            , email_placeholder_domain
+                                            , email_required ) d)) AS configuration
+
+    FROM dwh_main.dim_v_dom_configuration
+-- WHERE domain_name = 'com.vimcar.de.k59294822' --https://operations.vimcar.com/dashboard/contract/V96462436 has Mietmodell and all functions activated
+-- WHERE domain_name = 'com.vimcar.de.k22438069'  - has logbook b2c in Shop
+-- WHERE domain_name = 'com.vimcar.de.10426869'  -- has logbook b2c and Geo in Shop
+    WHERE domain_name = 'com.vimcar.26113805'  -- has logbook b2c and Geo in Shop
+)
+   , configuration_template AS (SELECT domain_configuration_template_name
+                                     , json_strip_nulls(ROW_TO_JSON((SELECT d
+                                                                     FROM (SELECT trip_statistics
+                                                                                , tax_pdf_drivers
+                                                                                , csv_exports_trips
+                                                                                , costs
+                                                                                , cost_rules
+                                                                                , costs_fleet
+                                                                                , contracts
+                                                                                , live_location
+                                                                                , route_tracking
+                                                                                , fencing
+                                                                                , logbook
+                                                                                , task_delegation
+                                                                                , tasks
+                                                                                , fuelcard_pins
+                                                                                , booking
+                                                                                , files
+                                                                                , custom_fields
+                                                                                , vin_decoding
+                                                                                , driver_license_check_lapid_manual
+                                                                                , cost_centers
+                                                                                , odometer_records
+                                                                                , default_driver
+                                                                                , administrators
+                                                                                , privacy_settings
+                                                                                , driver_instructions_lapid
+                                                                                , groups
+                                                                                , co2_reporting) d))) AS configuration
+                                FROM dwh_main.dim_v_dom_configuration_template
+)
+   , cte_matching AS (
+    SELECT domain_name
+         , dc.configuration
+         , ct.configuration
+         , ct.domain_configuration_template_name
+    FROM domain_conf dc
+             JOIN configuration_template ct
+                  ON ct.configuration::jsonb <@ dc.configuration::jsonb = TRUE
 )
 SELECT
-    c.*
-     , i.min_invoice_created_dt
-     , CASE
-           WHEN date_trunc('month',customer_first_subscription_start_dt) = '2020-01-01'
-               AND min_invoice_created_dt < '2019-12-21'
-               THEN TRUE
-           WHEN date_trunc('month',customer_first_subscription_start_dt) = '2021-01-01'
-               AND min_invoice_created_dt < '2020-12-21'
-               THEN TRUE
-           ELSE FALSE
-    END AS invoice_before_Dec_21st
-FROM customers c
-         JOIN (SELECT customer_id, min(invoice_created_dt) AS min_invoice_created_dt
-               FROM data_mart_internal_reporting.ir_sh_cb_invoice_line i
-               WHERE invoice_status <> 'voided'
-                 AND product_group <> 'Hardware'
-                 AND full_refund_flag = FALSE
-                 AND mrr_local_ccy >0
-               GROUP BY 1) i
-              ON c.customer_id = i.customer_id
-WHERE date_trunc('month',customer_first_subscription_start_dt) IN ('2020-01-01', '2021-01-01')
-  AND customer_first_subscription_start_dt = subscription_start_dt
-;
-
-SELECT
-    CASE
-        WHEN current_date + INTERVAL '1 year' < subscription_end_dt
-            THEN subscription_end_dt -  INTERVAL '1 year'
-        ELSE subscription_end_dt
-        END::DATE AS subscription_end_dt_ignore_3y_prod
-FROM data_mart_internal_reporting.ir_sh_cb_subscription WHERE customer_id = 'K76310569';
-
-
--- All renewal invoices of active contracts per month from November 2021 to March 2022:
--- the 3y contracts are treated as 1y ones (example: https://operations.vimcar.com/dashboard/contract/V62416887 this one has now renewal date of 1.12.2021 even though the "true" renewal of 3y product will occur on 1.12.2022)
-WITH customers AS (SELECT c.customer_id
-                        , CASE WHEN c.customer_is_fleet = TRUE THEN 'B2B' ELSE 'B2C' END AS customer_type
-                        , c.min_subscription_start_dt                                    AS customer_first_subscription_start_dt
-                        , s.subscription_id
-                        , s.subscription_status
-                        , s.subscription_start_dt
-                        , s.subscription_end_dt
-                        , date_trunc('month', s.subscription_end_dt)::DATE AS subscription_end_mth
-                        , CASE
-                              WHEN current_date + INTERVAL '3 year' < subscription_end_dt
-                                  THEN subscription_end_dt - INTERVAL '3 year'
-                              WHEN current_date + INTERVAL '2 year' < subscription_end_dt
-                                  THEN subscription_end_dt - INTERVAL '2 year'
-                              WHEN current_date + INTERVAL '1 year' < subscription_end_dt
-                                  THEN subscription_end_dt -  INTERVAL '1 year'
-                              ELSE subscription_end_dt
-        END::DATE AS subscription_end_dt_ignore_3y_prod
-                        , date_trunc('month',
-                                     CASE
-                                         WHEN current_date + INTERVAL '3 year' < subscription_end_dt
-                                             THEN subscription_end_dt - INTERVAL '3 year'
-                                         WHEN current_date + INTERVAL '2 year' < subscription_end_dt
-                                             THEN subscription_end_dt - INTERVAL '2 year'
-                                         WHEN current_date + INTERVAL '1 year' < subscription_end_dt
-                                             THEN subscription_end_dt -  INTERVAL '1 year'
-                                         ELSE subscription_end_dt
-                                         END)::DATE AS subscription_end_mth_ignore_3y_prod
-                   FROM data_mart_internal_reporting.ir_sh_cb_subscription s
-                            JOIN data_mart_internal_reporting.ir_sh_cb_customer c ON c.customer_id = s.customer_id
-                   WHERE TRUE
---                      AND c.customer_id = 'K15073145'
-                     AND c.customer_country = 'DE'
-                     AND s.subscription_status = 'active')
-   , customers_2 AS (SELECT c.*, i.current_mrr
-                     FROM customers c
-                              LEFT JOIN (SELECT subscription_id, SUM(mrr_eur - refund_mrr_eur) AS current_mrr
-                                         FROM data_mart_internal_reporting.ir_sh_cb_invoice_line
-                                         WHERE voided_ts IS NULL
-                                           AND product_group <> 'Hardware'
-                                           AND invoice_provisioning_start_dt <= CURRENT_DATE
-                                           AND invoice_provisioning_end_dt > CURRENT_DATE
-                                           AND mrr_local_ccy >0
-                                         GROUP BY 1) i ON i.subscription_id = c.subscription_id
-                     WHERE subscription_end_mth_ignore_3y_prod BETWEEN '2021-11-01' AND '2022-03-01'
--- AND customer_id IN ('76268795','63068476','K64584860','K43540197')
-)
-SELECT
-    customer_type
-     , subscription_end_mth_ignore_3y_prod
-     , count(DISTINCT customer_id) AS cnt_customers
-     , count(DISTINCT subscription_id) AS cnt_subscriptions
-     , sum(current_mrr) AS mrr
-FROM customers_2
-WHERE subscription_end_mth_ignore_3y_prod BETWEEN '2021-11-01' AND '2022-03-01'
-GROUP BY 1,2
-ORDER BY 1,2;
+    domain_name
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'B2C Logbook' THEN TRUE END)) AS has_logbook_b2c
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Logbook' THEN TRUE END)) AS has_fleet_logbook
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Admin' THEN TRUE END)) AS has_fleet_admin
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Geo' THEN TRUE END)) AS has_fleet_geo
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Pro' THEN TRUE END)) AS has_fleet_pro
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Admin UK' THEN TRUE END)) AS has_fleet_admin_uk
+     , true = ANY(ARRAY_AGG(CASE WHEN domain_configuration_template_name = 'Fleet Pro UK' THEN TRUE END)) AS has_fleet_pro_uk
+FROM cte_matching
+GROUP BY domain_name;

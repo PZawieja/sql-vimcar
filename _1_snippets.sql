@@ -236,7 +236,7 @@ SELECT i.customer_id
      , c.max_subscription_cancelled_dt
      , i.product_group
      , CASE
-         -- only invoices started in the past or today, the ones ending today are EXCLUDED  
+         -- only invoices started in the past or today, the ones ending today are EXCLUDED
            WHEN invoice_provisioning_start_dt <= CURRENT_DATE AND
                 invoice_provisioning_end_dt > CURRENT_DATE
                THEN mrr_eur - refund_mrr_eur
