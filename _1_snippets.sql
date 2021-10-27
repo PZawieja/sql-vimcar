@@ -271,3 +271,19 @@ WHERE d.domain_is_test = FALSE
     , 'com.vimcar.clients.vimcar'
     , 'com.vimcar')
 -- AND route_tracking = TRUE -- route documentation / route tracking
+
+------------------------------------------------------------------------------------------------------------
+-- Variable in sql:
+SELECT DISTINCT
+    doi.car_id
+              , doi.odometer_inquiry_ts AS odo_inq_ts_valid_from
+              , coalesce(LEAD(doi.odometer_inquiry_ts, 1) OVER (ORDER BY doi.odometer_inquiry_ts), now()) AS odo_inq_ts_valid_until
+              , doi.total_odometer_value_km
+FROM c_tmp.dm_odometerinquiry doi
+WHERE doi.car_id = ${car_id}
+  AND doi.total_odometer_value_km IS NOT NULL
+  AND doi.odometer_inquiry_is_valid IS TRUE;
+
+------------------------------------------------------------------------------------------------------------
+-- format to_char
+to_char("subscription[started_at]", 'YYYY-MM-DD HH24:MI:SS')
