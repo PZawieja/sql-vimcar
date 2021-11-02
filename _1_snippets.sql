@@ -286,4 +286,57 @@ WHERE doi.car_id = ${car_id}
 
 ------------------------------------------------------------------------------------------------------------
 -- format to_char
-to_char("subscription[started_at]", 'YYYY-MM-DD HH24:MI:SS')
+to_char("subscription[started_at]", 'YYYY-MM-DD HH24:MI:SS') ;
+
+
+------------------------------------------------------------------------------------------------------------
+-- combined product table:
+SELECT
+    c.cb_plan_id AS plan_id
+     , c.cb_plan_name AS product_name
+     , c.cb_plan_product_group AS product_group
+     , CASE WHEN cb_plan_id IN ('logbook_b2c-from_rent2buy-eur', 'logbook_b2c-one_time_buy-eur') THEN TRUE ELSE FALSE END AS product_is_one_time_buy
+     , CASE
+           WHEN cb_plan_id IN ('logbook_b2c-from_rent2buy-eur', 'logbook_b2c-one_time_buy-eur')
+               OR c.cb_plan_product_group = 'Hardware'
+               THEN FALSE
+           ELSE TRUE
+    END product_is_recurring
+     , c.cb_plan_billing_frequency AS product_billing_frequency
+     , c.cb_plan_duration_months AS product_duration_mths
+     , c.cb_plan_price AS product_price_net
+     , c.cb_plan_currency_code AS product_currency_code
+FROM dwh_main.dim_cb_plan c
+
+UNION ALL
+
+SELECT
+    p.product_uuid::varchar(32) AS plan_id
+     , p.product_name AS product_name
+     , upm.product_family AS product_group
+     , CASE WHEN p.product_uuid IN ('1db52694-baee-45fb-902f-8de7293621fe', '974e92e4-fed9-499e-8b7e-582c986f8a6b') THEN TRUE ELSE FALSE END AS product_is_one_time_buy
+     , CASE
+           WHEN (upm.is_recurring IS TRUE OR upm.is_subsequent_recurring IS TRUE)
+               AND p.product_uuid NOT IN ('1db52694-baee-45fb-902f-8de7293621fe', '974e92e4-fed9-499e-8b7e-582c986f8a6b')
+               THEN TRUE
+           ELSE FALSE
+    END product_is_recurring
+     , CASE WHEN upm.monthly_payment IS TRUE THEN 'monthly' ELSE 'yearly' END AS product_billing_frequency
+     , CASE WHEN p.product_name LIKE '%3-jährig%' THEN 36 ELSE 12 END AS product_duration_mths
+     , p.product_price_net AS product_price_net
+     , 'EUR' AS product_currency_code
+FROM dwh_main.dim_product p
+         LEFT JOIN dwh_main.umd_product_map upm
+                   ON upm.product_uuid = p.product_uuid
+;
+
+-- update UK invoices not in CB:
+UPDATE dwh_main.umd_uk_invoices_not_imported_to_chargebee
+SET invoice_provisioning_end_ts = '2021-10-03 22:00:00.000000 +00:00'
+WHERE invoice_id = '200000782';
+
+#,car_id,car_owner_id,domain_name,car_imei,car_foreign_id_handle,car_state,car_symbolic_name,car_brand_name,car_model_name,car_type,vin,car_licence_plate,car_logbook_is_active,car_end_logbook_ts,car_data_provider_id,car_current_offset,car_offset_timestamp,car_distance_correction_threshold_setting,car_odometer_reading_inquiry_days_setting,car_odometer_reading_inquiry_km_setting,car_first_trip_start_ts,car_last_trip_start_ts,car_created_ts,car_modified_ts,created_at
+1,239300988,192811,com.vimcar.de.k31328634,356232050817344,,active,,Maserati,Ghibli,personal,ZAMTS57B001306985,SU-OF-89,true,,triplab,1.0191855060022093,2021-09-23 15:06:54.000000 +00:00,,,,2020-02-14 18:41:39.000000 +00:00,2021-10-26 11:23:02.000000 +00:00,2020-02-14 13:41:47.000000 +00:00,2021-05-19 09:32:01.338415 +00:00,2021-10-26 13:47:20.829354 +00:00
+2,239344628,192811,com.vimcar.de.k31328634,356232050760908,,active,,Audi,Q7,personal,WAUZZZ4M4GD068395,SU-HF-1000,false,2021-09-19 14:39:06.258657 +00:00,triplab,0.9846072528974203,2021-09-02 17:43:24.000000 +00:00,,,,2020-02-15 09:30:54.000000 +00:00,2021-09-18 13:30:23.000000 +00:00,2020-02-14 16:06:10.000000 +00:00,2021-09-19 14:39:06.258690 +00:00,2021-10-26 13:47:20.829354 +00:00
+3,304256845,192811,com.vimcar.de.k31328634,359686075258643,,active,,BMW,3er,personal,WBAPP11070A976220,SU-TF-2010,true,,triplab,1.0100947248995609,2021-10-22 12:27:47.000000 +00:00,,,,2020-09-03 08:50:12.000000 +00:00,2021-10-26 06:55:01.000000 +00:00,2020-09-02 12:24:41.000000 +00:00,2021-05-19 09:32:01.338415 +00:00,2021-10-26 13:47:20.829354 +00:00
+4,451686125,192811,com.vimcar.de.k31328634,356232050760908,,active,,Audi,Q8,personal,WAUZZZF11MD002742,SU-HF-1000,true,,triplab,1.0169712915535403,2021-10-11 07:18:36.000000 +00:00,5,30,5000,2021-09-02 15:07:35.000000 +00:00,2021-10-23 14:52:11.000000 +00:00,2021-09-02 14:59:07.024003 +00:00,2021-09-02 14:59:07.024003 +00:00,2021-10-26 13:47:20.829354 +00:00
