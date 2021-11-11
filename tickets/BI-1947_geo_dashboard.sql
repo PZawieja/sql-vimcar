@@ -67,7 +67,7 @@ FROM customers_chargebee_foxbox c
         ON c.foxbox_domain_name = car.domain_name
 ;
 
-SELECT coupon_code FROM dwh_main.dim_combined_invoice_line WHERE subscription_id = '16CVz5SnJRZPd8k0U'
+
 ----------------------------------------------------------------------------------------------------------------
 -- RETENTION:
 -- Have the map view open for more than 30min in total
