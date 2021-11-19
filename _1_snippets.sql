@@ -360,3 +360,110 @@ FROM dwh_main.map_customer_to_foxbox_domain m
 WHERE record_nbr_per_unified_customer_id = 1
   AND map_fb_main_domain_name IS NOT NULL
 GROUP BY m.map_unified_customer_id;
+
+
+-- Braze array position:
+/*
+Users linked to multiple customer domains create multiple records.
+In order to make the external_id unique wit is agreed with CRM to aggregate the data in the way
+that first active customer ID is selected but thee product licenses are aggregated from the other customer ID too.
+Example: user 06f8257a-7b3d-435b-a801-e0665a6e841c
+   */
+WITH braze AS (
+    SELECT
+        b.*
+         , CASE
+               WHEN b.type IS NOT NULL
+                   THEN b.type
+               WHEN fm.main_domain_name IS NOT NULL
+                   THEN 'B2B'
+               ELSE 'B2C'
+        END customer_type_foxbox
+         , CASE
+               WHEN t.main_domain_name IS NOT NULL
+                   OR ft.main_domain_name IS NOT NULL
+                   THEN 'active'
+               ELSE 'inactive'
+        END customer_status_foxbox
+    FROM data_mart_internal_reporting.ir_mkt_braze_report b
+             JOIN dwh_main.dim_principal p
+                  ON b.external_id = p.principal_uuid
+             LEFT JOIN (SELECT DISTINCT main_domain_name FROM dwh_main.dim_principal WHERE principal_is_def_fleetmanager = TRUE) fm
+                       ON fm.main_domain_name = p.main_domain_name
+             LEFT JOIN (SELECT d.main_domain_name
+                        FROM dwh_main.dim_car c
+                                 JOIN dwh_main.dim_domain d
+                                      ON d.domain_name = c.domain_name
+                        WHERE c.car_last_trip_start_ts > current_date - INTERVAL '30 days') t
+                       ON t.main_domain_name = p.main_domain_name
+             LEFT JOIN (SELECT main_domain_name
+                        FROM data_mart_internal_reporting.ir_p_features_usage
+                        WHERE reporting_date = CURRENT_DATE - 1
+                          AND (domain_uses_cust_property_ft = TRUE
+                            OR domain_uses_cost_ft = TRUE
+                            OR domain_uses_documents_ft = TRUE)
+                        GROUP BY main_domain_name) ft
+                       ON ft.main_domain_name = p.main_domain_name
+-- WHERE external_id IN ('06f8257a-7b3d-435b-a801-e0665a6e841c' , '0000774c-8d9c-427c-8a04-fa6211c7f0d8')
+)
+SELECT DISTINCT ON (external_id)
+    external_id
+                               , email
+                               , first_name
+                               , last_name
+                               , gender
+                               , app_lang
+                               , user_status
+                               , user_role
+                               , org_name
+                               , org_domain
+                               , coalesce(type, customer_type_foxbox) AS type
+                               , CASE
+                                     WHEN org_territory IS NULL
+                                         AND org_domain LIKE 'com.vimcar.gb.%'
+                                         THEN 'UK'
+                                     WHEN org_territory IS NULL
+                                         THEN 'DACH'
+                                     ELSE org_territory
+    END AS org_territory
+                               , LEFT(user_created_date::TEXT, 19) AS user_created_date
+                               , org_freshsales_id
+                               , org_customer_id
+                               , org_subscription_management_tool
+                               , org_csm
+                               , coalesce(org_status, customer_status_foxbox) AS org_status
+                               , LEFT(org_start_date::TEXT, 10) AS org_start_date
+                               , LEFT(org_end_date::TEXT, 10) AS org_end_date
+                               , coalesce(sum(org_licenses_logbook) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_logbook
+                               , coalesce(sum(org_licenses_geo) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_geo
+                               , coalesce(sum(org_licenses_admin) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_admin
+                               , coalesce(sum(org_licenses_pro) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_pro
+                               , coalesce(sum(org_licenses_share) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_share
+                               , coalesce(sum(org_licenses_driverident) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_driverident
+                               , coalesce(sum(org_licenses_geoapi) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_geoapi
+                               , coalesce(sum(org_licenses_damagemanagement) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_damagemanagement
+--                                , coalesce(sum(org_licenses_fsk) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_fsk
+                               , coalesce(sum(org_licenses_lapid + org_licenses_fsk) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_lapid
+                               , coalesce(sum(org_licenses_fuelcard) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id),0) AS org_licenses_fuelcard
+
+                               , CASE WHEN sum(org_licenses_logbook) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_logbook
+                               , CASE WHEN sum(org_licenses_geo) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_geo
+                               , CASE WHEN sum(org_licenses_admin) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_admin
+                               , CASE WHEN sum(org_licenses_pro) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_pro
+                               , CASE WHEN sum(org_licenses_share) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_share
+                               , CASE WHEN sum(org_licenses_driverident) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_driverident
+                               , CASE WHEN sum(org_licenses_geoapi) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_geoapi
+                               , CASE WHEN sum(org_licenses_damagemanagement) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_damagemanagement
+--                                , CASE WHEN sum(org_licenses_fsk) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_fsk
+                               , CASE WHEN sum(org_licenses_lapid + org_licenses_fsk) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_lapid
+                               , CASE WHEN sum(org_licenses_fuelcard) FILTER (WHERE org_status IN ('active','non_renewing')) OVER (PARTITION BY external_id) >0 THEN TRUE ELSE FALSE END AS org_has_fuelcard
+                               , org_cars_pool
+                               , org_cars_private
+                               , user_freshworks_id
+                               , user_nps
+                               , user_group_dvag
+                               , user_group_taxadvisor
+                               , user_group_taxadvisorclient
+FROM braze
+ORDER BY external_id, array_position(array['active','future','non_renewing','cancelled', 'inactive'], org_status::text), type NULLS LAST
+;

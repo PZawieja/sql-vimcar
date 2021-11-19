@@ -1,4 +1,4 @@
--- 80% cars threshold calc:
+
 WITH foxbox_chargebee_map AS (
     SELECT
         m.map_fb_domain_name AS foxbox_domain_name
@@ -23,7 +23,7 @@ WITH foxbox_chargebee_map AS (
                    WHERE 1=1
                      AND i.invoice_status <> 'voided'
                      AND i.full_refund_flag = false
-                     AND c.customer_id_shop IS NULL -- only new customers created in CB
+                     --AND c.customer_id_shop IS NULL -- only new customers created in CB
                    GROUP BY i.customer_id, c.customer_status) AS fi
                   ON fi.customer_id = i.customer_id
              JOIN dwh_main.map_customer_to_foxbox_domain m
@@ -41,9 +41,17 @@ WITH foxbox_chargebee_map AS (
    , cars_raw AS (
     SELECT
         domain_name
-         , (car_created_ts AT TIME ZONE 'Europe/Berlin') AS car_created_ts
-         , (car_first_trip_start_ts AT TIME ZONE 'Europe/Berlin') AS car_first_trip_start_ts
-         , (car_first_trip_categorization_ts AT TIME ZONE 'Europe/Berlin') AS car_first_trip_categorization_ts
+         , car_created_ts AT TIME ZONE 'Europe/Berlin' AS car_created_ts
+         , CASE
+               WHEN car_created_ts > car_first_trip_start_ts
+                   THEN car_created_ts
+               ELSE car_first_trip_start_ts
+               END AT TIME ZONE 'Europe/Berlin' AS car_first_trip_start_ts
+         , CASE
+               WHEN car_created_ts > car_first_trip_categorization_ts
+                   THEN car_created_ts
+               ELSE car_first_trip_categorization_ts
+               END AT TIME ZONE 'Europe/Berlin' AS car_first_trip_categorization_ts
          , CASE WHEN row_number() OVER (PARTITION BY domain_name ORDER BY car_created_ts) > order_item_quantity * 0.8 THEN TRUE END flag_cars_threshold_reached
 --          , row_number() OVER (PARTITION BY domain_name ORDER BY car_created_ts)
 --          , car_created_ts
@@ -87,18 +95,18 @@ SELECT
      , CASE
            WHEN first_car_created_ts IS NOT NULL
                THEN GREATEST(first_car_created_ts::DATE - first_subscription_start_dt, 0)
-        END AS days_first_subscr_to_first_car_created  -- if the cars were created before the first invoice then show 0 instead of negative nbr of days
+    END AS days_first_subscr_to_first_car_created  -- if the cars were created before the first invoice then show 0 instead of negative nbr of days
      , CASE
            WHEN first_car_created_ts IS NOT NULL
                THEN GREATEST(cars_threshold_reached_dt::DATE - first_subscription_start_dt, 0)
-        END AS days_first_subscr_to_cars_created_threshold
+    END AS days_first_subscr_to_cars_created_threshold
      , CASE
            WHEN first_user_activated_ts IS NOT NULL
                AND first_car_created_ts IS NOT NULL
-            THEN GREATEST(DATE_PART('day', first_car_created_ts - first_user_activated_ts) * 24 +
-                        DATE_PART('hour', first_car_created_ts - first_user_activated_ts), 0)
+               THEN GREATEST(DATE_PART('day', first_car_created_ts - first_user_activated_ts) * 24 +
+                             DATE_PART('hour', first_car_created_ts - first_user_activated_ts), 0)
 --                THEN first_car_created_ts - first_user_activated_ts
-        END AS hours_first_user_activated_to_first_car_created
+    END AS hours_first_user_activated_to_first_car_created
      , CASE
            WHEN first_user_activated_ts IS NOT NULL
                AND car_first_trip_start_ts IS NOT NULL
@@ -117,7 +125,7 @@ FROM foxbox_chargebee_map m
                     FROM cars_raw
                     GROUP BY domain_name) car
                    ON m.foxbox_domain_name = car.domain_name
--- WHERE m.foxbox_domain_name = 'com.vimcar.gb.88f000241a324d34ad995ed6d2f2c2b6'
+WHERE m.foxbox_domain_name = 'com.vimcar.wksb-leonhard'
 ;
 
 
