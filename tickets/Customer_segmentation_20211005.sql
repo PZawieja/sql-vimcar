@@ -127,3 +127,4 @@ SELECT customer_id
      , COALESCE(SUM(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ), 0) AS tenure_mths_mrr_eur_expansion
 FROM customers
 GROUP BY customer_id, tenure_years, tenure_mths, mrr_fluctuation, flag_expansion
+;
