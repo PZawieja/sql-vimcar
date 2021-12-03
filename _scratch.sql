@@ -1,70 +1,124 @@
-WITH odo_inq AS (
-    SELECT DISTINCT
-        doi.car_id
-                  , doi.odometer_inquiry_ts + '3 minutes'::INTERVAL AS odo_inq_ts_valid_from
-                  , coalesce(LEAD(doi.odometer_inquiry_ts, 1) OVER (ORDER BY doi.odometer_inquiry_ts), now())  + '3 minutes'::INTERVAL AS odo_inq_ts_valid_until
-                  , doi.total_odometer_value_km
-    FROM c_tmp.dm_odometerinquiry doi
-    WHERE doi.car_id = 239300988
-      AND doi.total_odometer_value_km IS NOT NULL
-      AND doi.odometer_inquiry_is_valid IS TRUE
-), odo_calc AS (
+WITH customers AS (
     SELECT
-        trip_id
-         , trip_start_ts
-         , ROW_NUMBER () OVER (PARTITION BY cte.total_odometer_value_km ORDER BY trip_start_ts) AS trips_since_odo_inq
-         , SUM ((trip_distance + distance_adjustment) / 1000::decimal) OVER (PARTITION BY cte.total_odometer_value_km ORDER BY trip_start_ts) AS rolling_sum
-         , cte.total_odometer_value_km
-         , cte.total_odometer_value_km + SUM ((trip_distance + distance_adjustment) / 1000::decimal) OVER (PARTITION BY cte.total_odometer_value_km ORDER BY trip_start_ts) AS "Ankunft_kmstand"
-    FROM c_tmp.dm_trip dt
-             JOIN odo_inq cte
-                  ON cte.car_id = dt.car_id
-                      AND dt.trip_start_ts BETWEEN cte.odo_inq_ts_valid_from AND cte.odo_inq_ts_valid_until
-         -- odometer input within first 3 minutes of a trip is treated as happened before the trip
-         -- odometer input within last 3 minutes of a trip is treated as happened after the trip
-         -- AND (dt.trip_start_ts + '3 minutes'::INTERVAL >= cte.odo_inq_ts_valid_from AND dt.trip_start_ts <= cte.odo_inq_ts_valid_until)
-         --   OR (dt.trip_end_ts >= cte.odo_inq_ts_valid_from AND dt.trip_end_ts - '3 minutes'::INTERVAL <= cte.odo_inq_ts_valid_until)
-    WHERE dt.car_id = 239300988
+        r.customer_id
+         , CASE WHEN c.customer_id_chargebee IS NOT NULL THEN 'CB' ELSE 'SH' END source_system
+         , MIN(r.invoice_provisioning_start_dt) OVER (PARTITION BY r.customer_id) AS first_order_date
+         , r.customer_status
+         , CASE WHEN r.customer_status IN ('cancelled','non_renewing') THEN max_subscription_cancelled_dt END AS cancellation_dt
+         , CASE WHEN p.product_group NOT IN ('Logbook B2C', 'Admin', 'Logbook B2B', 'Geo', 'Pro') THEN 'Other' ELSE p.product_group END AS product
+         , CASE WHEN reporting_month = MIN(reporting_month) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_first_mth
+         , CASE WHEN reporting_month = MAX(reporting_month) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_current_mth
+         , CASE WHEN reporting_month = MAX(reporting_month) FILTER ( WHERE mrr_eur >0 ) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_last_mth_with_value
+         , cm.churn_mth
+         , mrr_eur
+         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) > 0 THEN TRUE END AS flag_expansion
+         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) < 0 THEN TRUE END AS flag_contraction
+         , mrr_eur_expansion + mrr_eur_contraction AS mrr_fluctuation
+         , licenses
+    FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
+             JOIN dwh_main.dim_combined_customer c
+                  ON c.customer_id = r.customer_id
+             JOIN dwh_main.dim_combined_product p
+                  ON p.plan_id = r.plan_id
+             LEFT JOIN (SELECT customer_id AS churn_customer_id
+                             , MAX(reporting_month) AS churn_mth
+                        FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
+                        WHERE churn_mth = true
+                        GROUP BY customer_id) cm
+                       ON cm.churn_customer_id = r.customer_id
+    WHERE is_fleet_customer = TRUE
+      AND flag_future = false
+--      AND subscription_id = 'V13028084'
+--     AND c.customer_id = 'K36527423' -- 506.35 expansion is correct
+--       and c.customer_id = '18941291'  -- 374.35 is correct
+--       AND r.customer_id = '11436777'
 )
 SELECT
-    dt.domain_name
-     , dt.trip_id
-     , 'Fahrt' AS type
-     , NULL::date AS "Änderungszeitpunkt"
-     , trip_category AS "Kategorie"
-     , dc.car_licence_plate AS "Kennzeichen"
-     , (dt.trip_start_ts AT TIME ZONE 'Europe/Berlin')::date AS "Abfahrt_datum"
-     , (trip_end_ts AT TIME ZONE 'Europe/Berlin')::date AS "Ankunft_datum"
-     , (CASE
-            WHEN cte2.trips_since_odo_inq = 1 THEN cte2.total_odometer_value_km
-            ELSE round(cte2.total_odometer_value_km + LAG(rolling_sum, 1) OVER (PARTITION BY cte2.total_odometer_value_km ORDER BY cte2.trip_start_ts))
-    END)::int AS "Abfahrt_kmstand"
-     , round(cte2."Ankunft_kmstand")::int AS "Ankunft_kmstand"
-     , round(trip_distance_business / 1000::decimal)::smallint AS "Betrieb_km"
-     , round(trip_distance_commute / 1000::decimal)::smallint AS "Arbeitsweg_km"
-     , round(trip_distance_private / 1000::decimal)::smallint AS "Privat_km"
-     , CASE is_merged_trip WHEN TRUE THEN 'Ja' ELSE 'Nein' END AS "Zusammengeführt"
-     , CASE
-           WHEN trip_category <> 'PRIVATE' AND trip_start_address ->> 'streetName' IS NOT NULL
-               THEN (trip_start_address ->> 'streetName') || ', ' || (trip_start_address ->> 'postalCode') || ' - ' || (trip_start_address ->> 'city') || ', ' || (trip_start_address ->> 'country')
-           WHEN trip_category <> 'PRIVATE' AND trip_start_address ->> 'streetName' IS NULL
-               THEN trip_start_address ->> 'venueName'
-    END AS "Start Adresse"
-     , CASE
-           WHEN trip_category <> 'PRIVATE' AND trip_end_address ->> 'streetName' IS NOT NULL
-               THEN (trip_end_address ->> 'streetName') || ', ' || (trip_end_address ->> 'postalCode') || ' - ' || (trip_end_address ->> 'city') || ', ' || (trip_end_address ->> 'country')
-           WHEN trip_category <> 'PRIVATE' AND trip_end_address ->> 'streetName' IS NULL
-               THEN trip_end_address ->> 'venueName'
-    END AS "End Adresse"
-     , trip_contact_name AS "Geschäftspartner"
-     , trip_contact_company AS "Firma"
-     , trip_reason AS "Anlass"
-     , trip_driver_information AS "Fahrer"
-     , trip_comment AS "Bemerkung"
-FROM c_tmp.dm_trip dt
-         JOIN c_tmp.dm_car dc
-              ON dc.car_id = dt.car_id
-         JOIN odo_calc cte2
-              ON cte2.trip_id = dt.trip_id
-WHERE dt.car_id = 239300988
-ORDER BY trip_id;
+    c.customer_id
+     , source_system
+     , c.customer_country
+     , customer_contact_company_name
+     , first_order_date
+     , date_trunc('month',first_order_date)::DATE AS first_order_mth
+     , c.customer_status
+     , cancellation_dt
+     , churn_mth
+     , segment_mrr_initial
+     , segment_mrr_current
+     , segment_mrr_most_recent
+     , string_agg(DISTINCT CASE WHEN flag_first_mth = TRUE THEN product END, ','
+                  order by CASE WHEN flag_first_mth = TRUE THEN product END) AS products_initial
+     , string_agg(DISTINCT CASE WHEN flag_last_mth_with_value = TRUE THEN product END, ','
+                  order by CASE WHEN flag_last_mth_with_value = TRUE THEN product END) AS products_most_recently
+--      , product
+-- MRR overall:
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ),0)  AS mrr_eur_initial
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ),0) AS mrr_eur_current
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS mrr_eur_most_recent_value
+     , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ),0) AS lifetime_mrr_eur_expansion
+     , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_contraction = TRUE ),0) AS lifetime_mrr_eur_contraction
+-- Licenses overall:
+     , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE ),0) AS licenses_initial
+     , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE ),0) AS licenses_current
+     , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS licenses_most_recent_value
+     , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_initial_b2b
+     , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_current_b2b
+     , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND is_b2b_product = TRUE),0) AS licenses_most_recent_value_b2b
+     , coalesce(fs.fs_vehicles_overall, 0) AS fs_vehicles_overall
+     , coalesce(cfg.domain_configuration_product, 'unknown') AS foxbox_configuration_product
+------ Admin:
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin'),0)  AS mrr_eur_initial_admin
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS mrr_eur_current_admin
+     , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS mrr_eur_most_recent_value_admin
+     , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin' ),0) AS licenses_initial_admin
+     , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS licenses_current_admin
+     , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS licenses_most_recent_value_admin
+FROM customers c
+         JOIN (SELECT customer_id
+                    , CASE
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 1000 THEN 'XL (1000+)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 500 THEN 'L (500-1000)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 200 THEN 'M (200-500)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 50 THEN 'S (50-200)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) >= 0 THEN 'XS (0-50)'
+                          ELSE 'Other'
+        END AS segment_mrr_initial
+                    , CASE
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 1000 THEN 'XL (1000+)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 500 THEN 'L (500-1000)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 200 THEN 'M (200-500)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 50 THEN 'S (50-200)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) >= 0 THEN 'XS (0-50)'
+                          ELSE 'Other'
+        END AS segment_mrr_current
+                    , CASE
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 1000 THEN 'XL (1000+)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 500 THEN 'L (500-1000)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 200 THEN 'M (200-500)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 50 THEN 'S (50-200)'
+                          WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) >= 0 THEN 'XS (0-50)'
+                          ELSE 'Other'
+        END AS segment_mrr_most_recent
+               FROM customers
+               GROUP BY customer_id
+) t1
+              ON t1.customer_id = c.customer_id
+         LEFT JOIN (SELECT fs_account_contact_id, SUM(fs_account_cf_vehicles_overall) AS fs_vehicles_overall
+                    FROM dwh_main.dim_fs_account
+                    WHERE fs_account_cf_vehicles_overall >0
+                    GROUP BY fs_account_contact_id) fs
+                   ON fs.fs_account_contact_id::varchar = c.customer_id
+         LEFT JOIN (SELECT
+                        m.map_unified_customer_id
+                         , string_agg(DISTINCT d.domain_configuration_template_match, ',') AS domain_configuration_product
+                    FROM dwh_main.map_customer_to_foxbox_domain m
+                             JOIN dwh_main.dim_v_dom_domain d
+                                  ON d.domain_name = m.map_fb_domain_name
+                    WHERE record_nbr_per_unified_customer_id = 1
+                      AND map_fb_main_domain_name IS NOT NULL
+                    GROUP BY m.map_unified_customer_id) cfg
+                   ON cfg.map_unified_customer_id = c.customer_id
+
+WHERE 1=1
+GROUP BY c.customer_id, source_system, cancellation_dt, customer_country, customer_contact_company_name, first_order_date, churn_mth, customer_status, churn_mth,
+         segment_mrr_initial, segment_mrr_current, segment_mrr_most_recent, fs.fs_vehicles_overall, cfg.domain_configuration_product--, product;

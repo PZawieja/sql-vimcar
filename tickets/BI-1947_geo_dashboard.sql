@@ -291,43 +291,28 @@ FROM foxbox_chargebee_map m
 --WHERE m.foxbox_domain_name = 'com.vimcar.wksb-leonhard'
 ;
 
+
+
 ----------------------------------------------------------------------------------------------------------------
 -- RETENTION:
 -- Have the map view open for more than 30min in total
 WITH users_in_scope AS (
     SELECT DISTINCT
         p.principal_uuid
-        , p.domain_name AS foxbox_domain_name
     FROM dwh_main.dim_combined_invoice_line i
-             JOIN (SELECT i.customer_id
-                        , c.customer_status
-                        , MIN(i.invoice_provisioning_start_dt) AS first_subscription_start_dt
-                   FROM dwh_main.dim_combined_invoice_line i
-                            JOIN dwh_main.dim_combined_customer c
-                                 ON c.customer_id = i.customer_id
-                   WHERE 1=1
-                     AND i.invoice_status <> 'voided'
-                     AND i.full_refund_flag = false
-                     --AND c.customer_id_shop IS NULL -- only new customers created in CB
-                   GROUP BY i.customer_id, c.customer_status) AS fi
-                  ON fi.customer_id = i.customer_id
              JOIN dwh_main.map_customer_to_foxbox_domain m
                   ON i.customer_id = m.map_unified_customer_id
                       AND m.record_nbr_per_unified_customer_id = 1
              JOIN dwh_main.dim_principal p
                   ON p.domain_name = m.map_fb_domain_name
-    WHERE 1=1
-      AND i.invoice_status <> 'voided'
+    WHERE i.invoice_status <> 'voided'
       AND i.full_refund_flag = false
-      AND i.product_group = 'Geo'
-      AND fi.first_subscription_start_dt = i.invoice_provisioning_start_dt -- only the 1st customer's purchase
--- AND m.map_fb_domain_name = 'com.vimcar.gb.ee60fd66db7a484aaed7ed6fc803e8f9'
+      AND i.product_group IN ('Geo', 'Pro')
 )
 , event_map_view_raw AS (
 SELECT
     a.principal_uuid
-    , u.foxbox_domain_name
-    , date_trunc('day', amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE AS date_key
+    , date_trunc('day', amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE AS job_date
     , amp_event_ts AS from_event_ts
     , lead(amp_event_ts) OVER (PARTITION BY a.principal_uuid ORDER BY a.principal_uuid, amp_event_ts) AS until_event_ts
     , date_part('second', lead(amp_event_ts::timestamp) OVER (PARTITION BY a.principal_uuid ORDER BY a.principal_uuid, amp_event_ts) - amp_event_ts::timestamp) AS event_duration
@@ -339,80 +324,54 @@ FROM dwh_main.dim_amp_event_fleet a
          JOIN users_in_scope u
               ON u.principal_uuid = a.principal_uuid::UUID
 WHERE amp_event_type IN ('live locations - map loaded', 'navigation - navigated away')
---   AND principal_uuid = '0b80b69c-ba98-41b7-92b6-bd217ecc628b'
-  AND amp_event_ts > '2021-01-01 00:00:00'
+  AND u.principal_uuid = '0b80b69c-ba98-41b7-92b6-bd217ecc628b'
+  AND amp_event_ts > '2020-12-23 00:00:00'
 )
 -- SELECT * FROM event_map_view_raw WHERE flag_from_until = TRUE ORDER BY from_event_ts;
-, result_user_level AS (SELECT e.principal_uuid
-                             , foxbox_domain_name
-                             , date_key
-                             , ROUND(SUM(event_duration) / 60 / 30) AS job_count
-                             , ROUND(SUM(event_duration) / 60)      AS total_minutes
-                        FROM event_map_view_raw e
-                        WHERE flag_from_until = TRUE
-                        GROUP BY e.principal_uuid, foxbox_domain_name, date_key)
-SELECT foxbox_domain_name
-     , date_key
-     , 'map_view_open'      AS job_type
-     , SUM(job_count)       AS job_count
-     , SUM(total_minutes)   AS total_minutes
-FROM result_user_level
-GROUP BY foxbox_domain_name, date_key
-    ;
-
-
+SELECT e.principal_uuid
+, job_date
+, ROUND(SUM(event_duration) / 60 / 30) AS cnt_jobs
+, ROUND(SUM(event_duration) / 60)      AS total_minutes
+FROM event_map_view_raw e
+WHERE flag_from_until = TRUE
+GROUP BY e.principal_uuid, job_date
+;
 
 WITH users_in_scope AS (
     SELECT DISTINCT
         p.principal_uuid
-                  , p.domain_name AS foxbox_domain_name
+                  , p.domain_name AS domain_name
     FROM dwh_main.dim_combined_invoice_line i
-             JOIN (SELECT i.customer_id
-                        , c.customer_status
-                        , MIN(i.invoice_provisioning_start_dt) AS first_subscription_start_dt
-                   FROM dwh_main.dim_combined_invoice_line i
-                            JOIN dwh_main.dim_combined_customer c
-                                 ON c.customer_id = i.customer_id
-                   WHERE 1=1
-                     AND i.invoice_status <> 'voided'
-                     AND i.full_refund_flag = false
-                     --AND c.customer_id_shop IS NULL -- only new customers created in CB
-                   GROUP BY i.customer_id, c.customer_status) AS fi
-                  ON fi.customer_id = i.customer_id
              JOIN dwh_main.map_customer_to_foxbox_domain m
                   ON i.customer_id = m.map_unified_customer_id
                       AND m.record_nbr_per_unified_customer_id = 1
              JOIN dwh_main.dim_principal p
                   ON p.domain_name = m.map_fb_domain_name
-    WHERE 1=1
-      AND i.invoice_status <> 'voided'
+    WHERE i.invoice_status <> 'voided'
       AND i.full_refund_flag = false
-      AND i.product_group = 'Geo'
-      AND fi.first_subscription_start_dt = i.invoice_provisioning_start_dt -- only the 1st customer's purchase
--- AND m.map_fb_domain_name = 'com.vimcar.gb.ee60fd66db7a484aaed7ed6fc803e8f9'
+      AND i.product_group IN ('Geo', 'Pro')
+      AND m.map_fb_domain_name = 'com.vimcar.aquatherm'
 )
 SELECT
-    u.foxbox_domain_name
-     , date_trunc('day', amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE AS date_key
+    u.principal_uuid
+     , u.domain_name
+     , date_trunc('day', amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE AS job_date
      , CASE
-         WHEN amp_event_type = 'custom locations - created'
-             THEN 'custom_locations'
-         WHEN amp_event_type IN ('route tracking - trips exported','route tracking v2 - trips exported')
-             THEN 'request_trips_export'
-         WHEN amp_event_type IN ('route tracking - routes loaded','route tracking v2 - routes loaded')
-             THEN 'request_route_history'
-         END AS job_type
-     , count(*) AS job_count
-     , count(DISTINCT u.principal_uuid) AS user_count
+           WHEN amp_event_type = 'custom locations - created'
+               THEN 'custom_locations'
+           WHEN amp_event_type IN ('route tracking - trips exported','route tracking v2 - trips exported')
+               THEN 'request_trips_export'
+           WHEN amp_event_type IN ('route tracking - routes loaded','route tracking v2 - routes loaded')
+               THEN 'request_route_history'
+    END AS job_type
+     , count(*) AS cnt_jobs
 FROM dwh_main.dim_amp_event_fleet a
-    JOIN users_in_scope u
-        ON u.principal_uuid = a.principal_uuid::UUID
+         JOIN users_in_scope u
+              ON u.principal_uuid = a.principal_uuid::UUID
 WHERE amp_event_type IN ('custom locations - created','route tracking v2 - trips exported','route tracking v2 - routes loaded')
-  AND amp_event_ts > '2021-01-01 00:00:00'
-GROUP BY u.foxbox_domain_name, a.amp_event_type, date_trunc('day', a.amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE
-
+  AND amp_event_ts > '2020-12-23 00:00:00'
+GROUP BY u.domain_name, u.principal_uuid, a.amp_event_type, date_trunc('day', a.amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE
 ;
-
 
 WITH invoice_raw AS (
     SELECT
@@ -474,6 +433,8 @@ WHERE flag_intial_order OR flag_current_order
 GROUP BY m.map_fb_domain_name
 ;
 
+
+-- Daily and monthly statistics:
 WITH subscriptions AS (
     SELECT
         m.map_fb_domain_name AS foxbox_domain
@@ -489,12 +450,13 @@ WITH subscriptions AS (
     WHERE i.invoice_status <> 'voided'
       AND i.full_refund_flag = false
       AND i.product_group IN ('Geo','Pro')
---     AND m.map_fb_domain_name IN ('com.vimcar.conceptbad-de','com.vimcar.de.10426869')
+--     AND m.map_fb_domain_name IN ('com.vimcar.conceptbad-de','com.vimcar.de.10426869','com.vimcar.de.arsvivendi')
     GROUP BY i.customer_id, m.map_fb_domain_name, i.invoice_provisioning_start_dt, i.invoice_provisioning_end_dt
 )
-   , domain_user AS (
+   , domain_user_agg_daily AS (
     SELECT
         dd.date_key
+         , date_trunc('month', dd.date_key)::DATE AS month_key
          , v_id_user_domain AS foxbox_domain
          -- An active domain is a domain where at least 50% of the users (users that accepted the activation link) are active.:
          , CASE
@@ -508,25 +470,100 @@ WITH subscriptions AS (
              JOIN dwh_main.dim_date dd
                   ON dd.date_key BETWEEN (v_id_user_created_ts AT TIME ZONE 'Europe/Berlin')::DATE AND coalesce((v_id_user_deleted_ts AT TIME ZONE 'Europe/Berlin')::DATE, current_date)
     WHERE exists(SELECT 1 FROM subscriptions s WHERE s.foxbox_domain = u.v_id_user_domain)
-      AND dd.date_key >= '2019-01-01'
+      AND dd.date_key >= '2021-01-01'
     GROUP BY dd.date_key, v_id_user_domain
 )
+   , domain_user_agg_monthly AS (
+    SELECT
+        date_trunc('month', dd.date_key)::DATE AS month_key
+         , v_id_user_domain AS foxbox_domain
+         -- An active domain is a domain where at least 50% of the users (users that accepted the activation link) are active.:
+         , CASE
+               WHEN count(DISTINCT principal_id) FILTER ( WHERE dd.date_key >= (v_id_user_password_created_ts AT TIME ZONE 'Europe/Berlin')::DATE ) / count(DISTINCT principal_id)::decimal >= 0.5
+                   THEN TRUE
+               ELSE FALSE
+        END AS is_treshold_activated_users
+         , count(DISTINCT principal_id) AS cnt_all_users
+         , count(DISTINCT principal_id) FILTER ( WHERE dd.date_key >= (v_id_user_password_created_ts AT TIME ZONE 'Europe/Berlin')::DATE ) AS cnt_activated_users
+    FROM dwh_main.dim_v_id_user u
+             JOIN dwh_main.dim_date dd
+                  ON dd.date_key BETWEEN (v_id_user_created_ts AT TIME ZONE 'Europe/Berlin')::DATE AND coalesce((v_id_user_deleted_ts AT TIME ZONE 'Europe/Berlin')::DATE, current_date)
+    WHERE exists(SELECT 1 FROM subscriptions s WHERE s.foxbox_domain = u.v_id_user_domain)
+      AND dd.date_key >= '2021-01-01'
+    GROUP BY date_trunc('month', dd.date_key)::DATE, v_id_user_domain
+)
    , date_domain AS (SELECT DISTINCT dd.date_key
+                                   , date_trunc('month', dd.date_key)::DATE AS month_key
                                    , s.foxbox_domain
-                                   , du.is_treshold_activated_users
-                                   , du.cnt_all_users
-                                   , du.cnt_activated_users
+                                   , dud.is_treshold_activated_users
+                                   , dud.cnt_all_users
+                                   , dud.cnt_activated_users
                      FROM dwh_main.dim_date dd
-                              LEFT JOIN subscriptions s ON s.invoice_provisioning_start_dt <= dd.date_key AND
-                                                           s.invoice_provisioning_end_dt > dd.date_key
-                              LEFT JOIN domain_user du ON du.date_key = dd.date_key AND du.foxbox_domain = s.foxbox_domain
-                     WHERE dd.date_key BETWEEN '2019-01-01' AND CURRENT_DATE)
-SELECT
-    date_key
-     , count(foxbox_domain) AS cnt_subscriptin_domains
-     , count(foxbox_domain) FILTER ( WHERE is_treshold_activated_users = True ) AS cnt_active_domains
-     , sum(cnt_all_users) AS cnt_all_users
-     , sum(cnt_activated_users) AS cnt_activated_users
-FROM date_domain
-GROUP BY date_key
+                              LEFT JOIN subscriptions s
+                                        ON s.invoice_provisioning_start_dt <= dd.date_key
+                                            AND s.invoice_provisioning_end_dt > dd.date_key
+                              LEFT JOIN domain_user_agg_daily dud
+                                        ON dud.date_key = dd.date_key
+                                            AND dud.foxbox_domain = s.foxbox_domain
+                     WHERE dd.date_key BETWEEN '2021-01-01' AND CURRENT_DATE - 1)
+   , month_domain AS (SELECT DISTINCT date_trunc('month', dd.date_key)::DATE AS month_key
+                                    , s.foxbox_domain
+                                    , dum.is_treshold_activated_users
+                                    , dum.cnt_all_users
+                                    , dum.cnt_activated_users
+                      FROM dwh_main.dim_date dd
+                               LEFT JOIN subscriptions s
+                                         ON s.invoice_provisioning_start_dt <= dd.date_key
+                                             AND s.invoice_provisioning_end_dt > dd.date_key
+                               LEFT JOIN domain_user_agg_monthly dum
+                                         ON dum.month_key = date_trunc('month', dd.date_key)::DATE
+                                             AND dum.foxbox_domain = s.foxbox_domain
+                      WHERE dd.date_key BETWEEN '2021-01-01' AND CURRENT_DATE - 1)
+
+   , stats_daily AS (SELECT dd.date_key
+                          , COUNT(dd.foxbox_domain)                                                             AS cnt_subscriptin_domains
+                          , SUM(dd.cnt_all_users)                                                               AS cnt_all_users       -- users active (non deleted)
+                          , SUM(dd.cnt_activated_users)                                                         AS cnt_activated_users -- based on password setup
+                          , COUNT(dd.foxbox_domain)
+                            FILTER ( WHERE dd.is_treshold_activated_users = TRUE OR ad.domain_name IS NOT NULL) AS cnt_active_domains  -- 50% users in the domain is activated (Password) or min. 1 user is active (10 jobs last 7 days)
+                          , SUM(COALESCE(ad.cnt_ctive_users, 0))                                                AS cnt_active_users    -- based on jobs
+                     FROM date_domain dd
+                              LEFT JOIN (SELECT j.date_key
+                                              , p.domain_name
+                                              , COUNT(DISTINCT j.principal_uuid) AS cnt_ctive_users
+                                         FROM data_mart_internal_reporting.ir_p_principal_job_count j
+                                                  JOIN dwh_main.dim_principal p
+                                                       ON j.principal_uuid = p.principal_uuid
+                                         WHERE j.cnt_jobs_last_7days >= 10
+                                         GROUP BY j.date_key, p.domain_name) ad
+                                        ON ad.domain_name = dd.foxbox_domain
+                                            AND dd.date_key = ad.date_key
+                     GROUP BY dd.date_key)
+   , stats_monthly AS (SELECT md.month_key
+                            , COUNT(md.foxbox_domain)                                                             AS cnt_subscriptin_domains
+                            , SUM(md.cnt_all_users)                                                               AS cnt_all_users       -- users active (non deleted)
+                            , SUM(md.cnt_activated_users)                                                         AS cnt_activated_users -- based on password setup
+                            , COUNT(md.foxbox_domain)
+                              FILTER ( WHERE md.is_treshold_activated_users = TRUE OR ad.domain_name IS NOT NULL) AS cnt_active_domains  -- 50% users in the domain is activated (Password) or min. 1 user is active (10 jobs last 7 days)
+                            , SUM(COALESCE(ad.cnt_ctive_users, 0))                                                AS cnt_active_users    -- based on jobs
+                       FROM month_domain md
+                                LEFT JOIN (SELECT date_trunc('month', j.date_key)::DATE AS month_key
+                                                , p.domain_name
+                                                , COUNT(DISTINCT j.principal_uuid) AS cnt_ctive_users
+                                           FROM data_mart_internal_reporting.ir_p_principal_job_count j
+                                                    JOIN dwh_main.dim_principal p
+                                                         ON j.principal_uuid = p.principal_uuid
+                                           WHERE j.cnt_jobs_last_7days >= 10
+                                           GROUP BY date_trunc('month', j.date_key)::DATE, p.domain_name) ad
+                                          ON ad.domain_name = md.foxbox_domain
+                                              AND ad.month_key = md.month_key
+                       GROUP BY md.month_key)
+SELECT 'monthly' AS aggregation_method,
+    month_key AS date_key,
+    cnt_subscriptin_domains, cnt_all_users, cnt_activated_users, cnt_active_domains, cnt_active_users
+FROM stats_monthly
+UNION ALL
+SELECT 'daily' AS aggregation_method,
+    date_key, cnt_subscriptin_domains, cnt_all_users, cnt_activated_users, cnt_active_domains, cnt_active_users
+FROM stats_daily
 ;
