@@ -69,12 +69,12 @@ WITH customers_with_revenue AS (
       AND c.customer_is_fleet = True
     GROUP BY c.customer_id, c.customer_is_fleet, c.customer_country, c.customer_status, r.first_invoice_dt_all_invoices, c.max_subscription_cancelled_dt, coalesce(c.max_subscription_cancelled_dt, current_date)
 )
-, customers_all AS (SELECT FALSE AS is_tester, *
-                    FROM customers_with_revenue r
-                    UNION ALL
-                    SELECT TRUE AS is_tester, *
-                    FROM customers_without_revenue nr
-                    WHERE NOT EXISTS(SELECT 1 FROM customers_with_revenue r WHERE r.customer_id = nr.customer_id))
+   , customers_all AS (SELECT FALSE AS is_tester, *
+                       FROM customers_with_revenue r
+                       UNION ALL
+                       SELECT TRUE AS is_tester, *
+                       FROM customers_without_revenue nr
+                       WHERE NOT EXISTS(SELECT 1 FROM customers_with_revenue r WHERE r.customer_id = nr.customer_id))
 SELECT * FROM customers_all
 ;
 
