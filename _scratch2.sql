@@ -1,3 +1,15 @@
+SELECT * FROM dwh_main.dim_combined_product WHERE product_name LIKE '%Vimcar Fleet Admin (3-jährige Laufzeit)%'
+
+
+SELECT * FROM dwh_main.umd_sales_price_increase_batch WHERE batch_name like '%Jan%' AND batch_name like '%B2B%' ;
+SELECT * FROM dwh_main.umd_sales_price_increase_batch WHERE contract_id = 'V60270003';
+
+SELECT * FROM dwh_main.dim_combined_subscription WHERE subscription_id = 'V60270003' ;
+
+
+B2C 12.105 contracts
+B2B 991 contracts
+
 -- BI-1956 product mapping
 
 WITH cte_product AS (
@@ -19,12 +31,14 @@ WITH cte_product AS (
     FROM dwh_main.umd_product_map m
              JOIN dwh_main.dim_product p
                   ON p.product_uuid = m.product_uuid
+    WHERE m.product_family NOT IN ('Hardware', 'Other')
 )
    , customer_product AS (
     SELECT
         c.customer_id
          , ctr.contract_id
          , upm.product_uuid AS current_product_uuid
+         , upm.product_family AS current_product_family
          , upm.product_name AS current_product_name
          , upm.product_created_dt AS current_product_created_dt
          , upm.product_note AS current_product_note
@@ -54,257 +68,23 @@ WITH cte_product AS (
                            AND upm2.product_price_net > upm.product_price_net
                            AND upm2.product_tax <> 0.16
              LEFT JOIN
-         (SELECT product_name, MAX(product_price_net) AS max_price_net
-          FROM cte_product
-          GROUP BY product_name) p
-         ON p.product_name = upm.product_name
+                     (SELECT product_name, MAX(product_price_net) AS max_price_net
+                      FROM cte_product
+                      GROUP BY product_name) p
+                ON p.product_name = upm.product_name
+
+             LEFT JOIN dwh_main.umd_sales_price_increase_batch b
+                       ON b.contract_id = ctr.contract_id
     WHERE fcl.opcode <> 'D'
-      AND upm.product_family != 'Other'
---     AND ctr.contract_id = 'V12127102'
+        AND batch_name like '%Jan%' AND batch_name like '%B2B%'
+       --     AND ctr.contract_id = 'V12127102'
 --     AND upm.product_uuid = 'ade12889-23be-40fa-895a-52cd7b8e0891'
-      AND ctr.contract_id IN (
-                              'V70765101',
-                              'V77119385',
-                              'V10155631',
-                              'V71675129',
-                              'V61300650',
-                              'V33893452',
-                              'V89153237',
-                              '68302657',
-                              'V10069311',
-                              'V82702057',
-                              'V38491554',
-                              'V10199483',
-                              'V95357364',
-                              '18667405',
-                              'V71828549',
-                              'V10895783',
-                              'V83924016',
-                              'V61048102',
-                              'V15339356',
-                              'V40827159',
-                              'V42786782',
-                              'V74733458',
-                              '98665807',
-                              'V45099908',
-                              'V89328241',
-                              'V64379397',
-                              'V52865716',
-                              'V14301046',
-                              'V98339024',
-                              '93572683',
-                              'V26099507',
-                              '37830987',
-                              'V40007051',
-                              '72235318',
-                              'V13414382',
-                              '10689027',
-                              '81703701',
-                              '36645101',
-                              'V33494333',
-                              '46854770',
-                              '49887195',
-                              '77051166',
-                              '33668059',
-                              '87656836',
-                              'V59199443',
-                              '49098177',
-                              '96523358',
-                              'V21901721',
-                              'V60568785',
-                              '81521465',
-                              'V54357466',
-                              'V79122834',
-                              '83843180',
-                              'V63911474',
-                              'V74345918',
-                              'V90166226',
-                              'V14677760',
-                              'V83986388',
-                              '26544656',
-                              '58809271',
-                              '81030202',
-                              'V27559760',
-                              'V92753459',
-                              '88287982',
-                              'V22678008',
-                              'V87173461',
-                              '96405923',
-                              'V95204952',
-                              '91169705',
-                              'V18289906',
-                              'V25276464',
-                              'V25298019',
-                              'V28253672',
-                              'V34086360',
-                              'V40612985',
-                              'V51466357',
-                              'V68799759',
-                              'V88668252',
-                              '23570466',
-                              'V24906092',
-                              'V51148385',
-                              '38313173',
-                              'V16618940',
-                              '50504030',
-                              '68006426',
-                              'V18459446',
-                              'V34233471',
-                              'V67385004',
-                              'V84967249',
-                              'V48847085',
-                              '27700133',
-                              'V14906676',
-                              'V68027385',
-                              '40814036',
-                              'V16537728',
-                              'V19484656',
-                              '21120561',
-                              '28853260',
-                              '28880880',
-                              '71482869',
-                              '86135945',
-                              '92154209',
-                              '96496481',
-                              'V54834731',
-                              'V61082860',
-                              'V81180154',
-                              'V83213566',
-                              'V84321310',
-                              'V87395966',
-                              'V90550579',
-                              'V92844495',
-                              'V93043648',
-                              'V97039169',
-                              'V99984885',
-                              'V33984291',
-                              'V14351925',
-                              'V51316904',
-                              '99520792',
-                              'V32073366',
-                              '58827350',
-                              '74038155',
-                              'V49237493',
-                              'V64798131',
-                              'V71284419',
-                              'V72842754',
-                              'V73886748',
-                              'V75494160',
-                              'V82601201',
-                              'V32839897',
-                              'V38995442',
-                              'V48239711',
-                              'V55519224',
-                              'V78870891',
-                              'V94166241',
-                              'V70653072',
-                              '68077006',
-                              '46301588',
-                              '62143880',
-                              'V25173659',
-                              'V99403704',
-                              '46625378',
-                              '63527826',
-                              'V12348982',
-                              'V13734952',
-                              'V26366574',
-                              'V50919232',
-                              'V81266382',
-                              'V89190446',
-                              'V91568739',
-                              '80903217',
-                              '78519761',
-                              'V28559023',
-                              'V40295672',
-                              '36832778',
-                              '86250054',
-                              '19742703',
-                              'V64671309',
-                              'V83415258',
-                              'V98324465',
-                              '35059913',
-                              '60831658',
-                              '66756851',
-                              '70097920',
-                              '78828076',
-                              '88286337',
-                              'V10217765',
-                              'V14231608',
-                              'V14481010',
-                              'V15546249',
-                              'V17907511',
-                              'V21461837',
-                              'V28574924',
-                              'V29870342',
-                              'V30720922',
-                              'V41288156',
-                              'V46937727',
-                              'V47797946',
-                              'V51620022',
-                              'V52478606',
-                              'V53479673',
-                              'V56032147',
-                              'V58795043',
-                              'V64199821',
-                              'V70102335',
-                              'V70487830',
-                              'V72983549',
-                              'V73724225',
-                              'V78074978',
-                              'V78241760',
-                              'V78702682',
-                              'V85921366',
-                              'V90204964',
-                              'V91554955',
-                              'V94705140',
-                              'V96022990',
-                              'V99080395',
-                              'V99769023',
-                              '10657306',
-                              'V37150049',
-                              'V71098344',
-                              'V90178395',
-                              '53522885',
-                              'V58704469',
-                              'V68087292',
-                              'V96012670',
-                              '15831587',
-                              '24974676',
-                              'V32909995',
-                              'V90791574',
-                              '11711634',
-                              '29685576',
-                              'V10998054',
-                              'V18635792',
-                              'V19370092',
-                              'V26072153',
-                              'V29181270',
-                              'V29920773',
-                              'V43567390',
-                              'V69610272',
-                              'V74937530',
-                              'V97359169',
-                              'V75753039',
-                              'V76346129',
-                              '42071479',
-                              '49223125',
-                              '52583941',
-                              'V38301090',
-                              'V40807760',
-                              'V47824157',
-                              'V50875986',
-                              'V28239371',
-                              'V65804076',
-                              '93848831',
-                              '80785864',
-                              'V27917123',
-                              'V28984530',
-                              'V83995816'
-        )
+--       AND ctr.contract_id IN (                             )
 )
 --    SELECT * FROM customer_product; -- CHECK CUSTOMERS
    , cte_1 AS (SELECT DISTINCT
                    current_product_uuid
+                             , current_product_family
                              , current_product_name
                              , current_product_created_dt
                              , current_product_note
@@ -348,6 +128,7 @@ IMPORTANT NOTE:
                FROM customer_product cp)
 SELECT DISTINCT
     current_product_uuid
+              , current_product_family
               , current_product_name
               , current_product_created_dt
               , current_product_note

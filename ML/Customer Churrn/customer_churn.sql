@@ -1,3 +1,4 @@
+
 WITH customers_with_revenue AS (
     SELECT
         c.customer_id
@@ -14,6 +15,7 @@ WITH customers_with_revenue AS (
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '% bi-yearly%' THEN TRUE END))   AS billing_every_6_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '% quarterly%' THEN TRUE END))   AS billing_every_3_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '% monthly%' THEN TRUE END))     AS billing_every_1_mths
+         , true = ANY(ARRAY_AGG(CASE WHEN r.invoice_discount_pct >0 THEN TRUE END))                          AS has_discount
          , SUM(mrr_eur) AS mrr
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Logbook' ) AS mrr_logbook
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Admin' ) AS mrr_admin
@@ -21,7 +23,8 @@ WITH customers_with_revenue AS (
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Pro' ) AS mrr_pro
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Other' ) AS mrr_other
     FROM data_mart_internal_reporting.ir_m_investor_report r
-             JOIN (SELECT customer_id, MAX(reporting_month) AS last_mth_with_value
+             JOIN (SELECT customer_id
+                        , MAX(reporting_month) AS last_mth_with_value
                    FROM data_mart_internal_reporting.ir_m_investor_report
                    WHERE mrr_eur > 0
                    GROUP BY customer_id) r2
@@ -50,6 +53,7 @@ WITH customers_with_revenue AS (
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '% bi-yearly%' THEN TRUE END))   AS billing_every_6_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '% quarterly%' THEN TRUE END))   AS billing_every_3_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '% monthly%' THEN TRUE END))     AS billing_every_1_mths
+         , true = ANY(ARRAY_AGG(CASE WHEN r.invoice_discount_pct >0 THEN TRUE END))             AS has_discount
          , round(SUM(mrr_without_credit_note / exchange_rate), 2) AS mrr
          , round(SUM(mrr_without_credit_note / exchange_rate) FILTER ( WHERE r.product_group = 'Logbook' ), 2) AS mrr_logbook
          , round(SUM(mrr_without_credit_note / exchange_rate) FILTER ( WHERE r.product_group = 'Admin' ), 2) AS mrr_admin
