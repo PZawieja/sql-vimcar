@@ -10,8 +10,9 @@ SELECT * FROM dwh_main.dim_combined_subscription WHERE subscription_id = 'V60270
 B2C 12.105 contracts
 B2B 991 contracts
 
--- BI-1956 product mapping
 
+
+-- BI-1956 product mapping
 WITH cte_product AS (
     SELECT
         m.product_uuid
@@ -78,8 +79,6 @@ WITH cte_product AS (
     WHERE fcl.opcode <> 'D'
         AND batch_name like '%Jan%' AND batch_name like '%B2B%'
        --     AND ctr.contract_id = 'V12127102'
---     AND upm.product_uuid = 'ade12889-23be-40fa-895a-52cd7b8e0891'
---       AND ctr.contract_id IN (                             )
 )
 --    SELECT * FROM customer_product; -- CHECK CUSTOMERS
    , cte_1 AS (SELECT DISTINCT
@@ -101,6 +100,8 @@ IMPORTANT NOTE:
 --                                    WHEN current_product_uuid = '83d52040-6f87-428c-83f8-32eb853b6d22' THEN 'b16a5957-b5d1-4b2f-860b-331c25fe2989'
 --                                    WHEN current_product_uuid = 'c0e8ec1d-9f72-4309-a377-f5ca0508644f' THEN '0a64e2b9-406c-4810-a3d2-c9d67dc95b89'
 --                                    WHEN current_product_uuid = 'efcab066-7216-4948-a765-99d82ba44566' THEN '061928ea-042b-4182-a1fe-a711f5134389'
+--                                    WHEN current_product_uuid = '7fb84572-05ac-4c94-ae9b-f3fcf07c2cf5' THEN '061928ea-042b-4182-a1fe-a711f5134389' -- sheet B2C renewal Jan'22
+--                                    WHEN current_product_uuid = '576a7be3-004b-410e-b20d-633a1c177120' THEN '061928ea-042b-4182-a1fe-a711f5134389' -- sheet B2C renewal Jan'22
         -- B2B mapped in October https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=278718204
                                    WHEN current_product_uuid = '0c809251-a8d4-4d54-a681-41839f022ef5' THEN '65a0bfd5-d789-4a7e-aad2-9787d1f1048e'
                                    WHEN current_product_uuid = '1c2891ea-2d8d-464b-8f3a-9d22f2ed42d0' THEN '7d6fb064-5df7-4858-b543-bf4cd612897a'
@@ -119,6 +120,9 @@ IMPORTANT NOTE:
         -- B2B mapped in November https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=482325070
                                    WHEN current_product_uuid = '408a0153-5567-452c-a10e-242f6fabaaf4' THEN '5fc29394-7dcb-4535-9641-5dfbdc503f80'
                                    WHEN current_product_uuid = 'ade12889-23be-40fa-895a-52cd7b8e0891' THEN 'f0622671-3256-41b0-9a49-aee469973257'
+        -- B2B mapped in December https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=643694551
+                                   WHEN current_product_uuid = '9f5feb96-ad9d-462b-9060-ddfc508fc190' THEN '2d7da6f5-8539-40bc-b740-fb99ecb76113'
+                                   WHEN current_product_uuid = 'e9ff0a5f-fb44-4b2b-8a05-72896f09bdf5' THEN 'e9ff0a5f-fb44-4b2b-8a05-72896f09bdf5'  -- we keep the same product here
                                    ELSE future_product_uuid
         END AS future_product_uuid
                              , future_product_name
