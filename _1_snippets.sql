@@ -425,7 +425,7 @@ SELECT DISTINCT ON (external_id)
                                      WHEN org_territory IS NULL
                                          THEN 'DACH'
                                      ELSE org_territory
-    END AS org_territory
+                                END AS org_territory
                                , LEFT(user_created_date::TEXT, 19) AS user_created_date
                                , org_freshsales_id
                                , org_customer_id
@@ -467,3 +467,11 @@ SELECT DISTINCT ON (external_id)
 FROM braze
 ORDER BY external_id, array_position(array['active','future','non_renewing','cancelled', 'inactive'], org_status::text), type NULLS LAST
 ;
+
+-- customer source_system (ORIGIN!)
+CASE WHEN c.customer_id_shop IS NOT NULL THEN 'SH' ELSE 'CB' END AS customer_origin_system;
+
+-- array_agg how to use:
+CASE WHEN array_agg(i.product_group) @> '{"Geo"}' THEN TRUE ELSE FALSE END AS has_geo ;
+-- calculate time difference in seconds:
+extract(EPOCH FROM event_end_ts::timestamp - event_start_ts::timestamp) ;
