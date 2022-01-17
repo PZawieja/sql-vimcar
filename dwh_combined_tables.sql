@@ -101,3 +101,4 @@ FROM dwh_main.dim_combined_customer c
               ON dd.domain_name = map.map_fb_domain_name
 WHERE map.record_nbr_per_unified_customer_id = 1
 ;
+

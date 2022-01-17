@@ -22,10 +22,10 @@ WITH customers_with_revenue AS (
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Geo' ) AS mrr_geo
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Pro' ) AS mrr_pro
          , SUM(mrr_eur) FILTER ( WHERE r.product_group = 'Other' ) AS mrr_other
-    FROM data_mart_internal_reporting.ir_m_investor_report r
+    FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
              JOIN (SELECT customer_id
                         , MAX(reporting_month) AS last_mth_with_value
-                   FROM data_mart_internal_reporting.ir_m_investor_report
+                   FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
                    WHERE mrr_eur > 0
                    GROUP BY customer_id) r2
                   ON r.customer_id = r2.customer_id
@@ -80,7 +80,11 @@ WITH customers_with_revenue AS (
                        FROM customers_without_revenue nr
                        WHERE NOT EXISTS(SELECT 1 FROM customers_with_revenue r WHERE r.customer_id = nr.customer_id))
 SELECT * FROM customers_all
-WHERE first_subscription_start_dt > current_date
+WHERE first_subscription_start_dt <= current_date
+;
+
+
+
 
 ;
 WITH cte_product AS (
