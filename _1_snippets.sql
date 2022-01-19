@@ -22,16 +22,7 @@ SELECT * FROM dwh_main.dim_main_domain_stat_scd2 WHERE md_has_driver_ident  = tr
 SELECT * FROM dwh_main.dim_main_domain_stat_scd2 WHERE main_domain_foxbox = 'com.vimcar.de.k55402707' ORDER BY version_nr
 ;
 
--- How to join domains mapping table:
-SELECT map_principal_domain
-FROM dwh_main.dim_contract ctr
-JOIN dwh_main.map_customer_principal_domain mcpd ON ctr.domain_name = mcpd.map_customer_domain
-WHERE mcpd.mapped_principal_domains = 1
-AND mcpd.map_principal_domain NOT IN ('com.vimcar.demoaccounts.demofleet', 'com.vimcar.demoaccounts' , 'com.vimcar.test.backend', 'com.vimcar', 'com.vimcar.clients')
-AND mcpd.map_principal_domain NOT LIKE '%test%'
-GROUP BY 1
-HAVING MIN(ctr.contract_status) != 'active'
-;
+
 -- time zone format
 o.order_provisioning_start_ts AT TIME ZONE 'Europe/Berlin'
 ;
