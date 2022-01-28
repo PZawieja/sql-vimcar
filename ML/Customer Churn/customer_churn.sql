@@ -5,9 +5,13 @@ WITH customers_with_revenue AS (
          , c.customer_is_fleet
          , c.customer_country
          , c.customer_status
+         , CASE WHEN c.customer_id_chargebee IS NOT NULL THEN 'CB' ELSE 'SH' END AS current_system
          , c.min_subscription_start_dt AS first_subscription_start_dt
-         , c.max_subscription_cancelled_dt
-         , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
+         , CASE
+             WHEN c.customer_status IN ('cancelled', 'non_renewing')
+                 THEN c.max_subscription_cancelled_dt
+            END AS customer_cancelled_dt
+--          , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%36 %' THEN TRUE END))          AS subscription_length_36_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%12 %' THEN TRUE END))          AS subscription_length_12_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%1 %' THEN TRUE END))           AS subscription_length_1_mths
@@ -33,9 +37,11 @@ WITH customers_with_revenue AS (
              JOIN dwh_main.dim_combined_customer c
                   ON c.customer_id = r.customer_id
     WHERE 1=1
-      AND c.customer_is_fleet = True
+--       AND c.customer_is_fleet = True
 --       AND c.customer_id = '10052946'
-    GROUP BY c.customer_id, c.customer_is_fleet, c.customer_country, c.customer_status, c.min_subscription_start_dt, c.max_subscription_cancelled_dt, coalesce(c.max_subscription_cancelled_dt, current_date)
+--         AND c.customer_id = '10923834'
+    GROUP BY c.customer_id, c.customer_is_fleet, c.customer_country, c.customer_status, c.customer_id_chargebee,
+             c.min_subscription_start_dt, c.max_subscription_cancelled_dt, coalesce(c.max_subscription_cancelled_dt, current_date)
 )
    , customers_without_revenue AS (
     SELECT
@@ -43,9 +49,12 @@ WITH customers_with_revenue AS (
          , c.customer_is_fleet
          , c.customer_country
          , c.customer_status
-         , r.first_invoice_dt_all_invoices AS first_subscription_start_dt
-         , c.max_subscription_cancelled_dt
-         , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
+         , CASE WHEN c.customer_id_chargebee IS NOT NULL THEN 'CB' ELSE 'SH' END AS current_system
+         , c.min_subscription_start_dt AS first_subscription_start_dt
+         , CASE
+               WHEN c.customer_status IN ('cancelled', 'non_renewing')
+                   THEN c.max_subscription_cancelled_dt
+            END AS customer_cancelled_dt
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%36 %' THEN TRUE END))          AS subscription_length_36_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%12 %' THEN TRUE END))          AS subscription_length_12_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%1 %' THEN TRUE END))           AS subscription_length_1_mths
@@ -70,19 +79,26 @@ WITH customers_with_revenue AS (
              JOIN dwh_main.dim_combined_customer c
                   ON c.customer_id = r.customer_id
     WHERE 1=1
-      AND c.customer_is_fleet = True
-    GROUP BY c.customer_id, c.customer_is_fleet, c.customer_country, c.customer_status, r.first_invoice_dt_all_invoices, c.max_subscription_cancelled_dt, coalesce(c.max_subscription_cancelled_dt, current_date)
+        AND c.customer_status IN ('non_renewing', 'cancelled')
+--       AND c.customer_is_fleet = True
+--       AND c.customer_id = '10923834'
+    GROUP BY c.customer_id, c.customer_is_fleet, c.customer_country, c.customer_status, c.customer_id_chargebee,
+             c.min_subscription_start_dt, c.max_subscription_cancelled_dt, coalesce(c.max_subscription_cancelled_dt, current_date)
 )
-   , customers_all AS (SELECT FALSE AS is_tester, *
+   , customers_all AS (SELECT TRUE AS had_revenue_ever, *
                        FROM customers_with_revenue r
                        UNION ALL
-                       SELECT TRUE AS is_tester, *
+                       SELECT FALSE AS had_revenue_ever, *
                        FROM customers_without_revenue nr
                        WHERE NOT EXISTS(SELECT 1 FROM customers_with_revenue r WHERE r.customer_id = nr.customer_id))
-SELECT * FROM customers_all
+SELECT
+CASE WHEN customer_cancelled_dt IS NULL THEN FALSE ELSE TRUE END AS churn_flag
+, CASE WHEN (customer_cancelled_dt - first_subscription_start_dt) <= 100 THEN TRUE ELSE FALSE END AS churn_100d_flag
+, coalesce(customer_cancelled_dt, current_date) - first_subscription_start_dt AS tenure_days
+, *
+FROM customers_all
 WHERE first_subscription_start_dt <= current_date
 ;
-
 
 
 

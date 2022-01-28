@@ -1,165 +1,252 @@
-SELECT *
-FROM dwh_main.dim_product
-WHERE 1=1
-  AND product_name = 'Vimcar Miet-Modell'
---  AND product_uuid = '576a7be3-004b-410e-b20d-633a1c177120'
-
-WITH cte_product AS (
+--------------------------------------------------------------------------------
+----- Chargebee subscriptions calculation:
+--------------------------------------------------------------------------------
+WITH cb_subs_precalculation AS (
     SELECT
-        m.product_uuid
-         , m.product_key
-         , m.product_name
-         , m.product_note
-         , m.product_length_and_payment
-         , m.product_family
-         , m.is_recurring
-         , m.is_subsequent_recurring
-         , p.product_is_shippable
-         , p.product_is_for_sale
-         , p.product_price_net
-         , p.product_weight
-         , p.product_tax
-         , (p.product_created_ts AT TIME ZONE 'Europe/Berlin')::DATE AS product_created_dt
-    FROM dwh_main.umd_product_map m
-             JOIN dwh_main.dim_product p
-                  ON p.product_uuid = m.product_uuid
-    WHERE m.product_family NOT IN ('Hardware', 'Other')
+        s.cb_subscr_customer_id                                                                               AS customer_id
+         , s.cb_subscr_id                                                                                     AS subscription_id
+         , s.cb_subscr_status                                                                                 AS subscription_status
+         , (coalesce(s.cb_subscr_started_ts, s.cb_subscr_next_billing_ts
+                , MIN(fil.cb_inv_line_item_from_ts) OVER (PARTITION BY s.cb_subscr_id)) AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_start_dt
+         , lower(s.cb_subscr_coupons -> 0 ->> 'coupon_id') AS subscription_coupon_1
+         , lower(s.cb_subscr_coupons -> 1 ->> 'coupon_id') AS subscription_coupon_2
+         , CASE
+               WHEN s.cb_subscr_status IN ('non_renewing','cancelled')
+                   THEN coalesce(e.event_subscr_cancelled_ts, cb_subscr_cancelled_ts, cb_subscr_updated_ts) AT TIME ZONE 'Europe/Berlin'
+        END::DATE                                                                                          AS subscription_cancelled_dt
+         , CASE
+               WHEN s.cb_subscr_status IN ('non_renewing','cancelled')
+                   THEN coalesce(s.cb_subscr_cancel_reason_code, 'n/a')
+        END AS subscription_cancellation_reason
+         , (coalesce(CASE
+                         WHEN s.cb_subscr_status = 'future'
+                             THEN s.cb_subscr_next_billing_ts + (p.cb_plan_duration_months * INTERVAL '1 month')
+                         WHEN s.cb_subscr_remaining_billing_cycles > 0
+                             AND s.cb_subscr_billing_period_unit = 'month'
+                             THEN cb_subscr_current_term_end_ts + (s.cb_subscr_billing_period * s.cb_subscr_remaining_billing_cycles * INTERVAL '1 month')
+                         WHEN s.cb_subscr_remaining_billing_cycles > 0
+                             AND s.cb_subscr_billing_period_unit = 'year'
+                             THEN cb_subscr_current_term_end_ts + (s.cb_subscr_billing_period * s.cb_subscr_remaining_billing_cycles * INTERVAL '1 year')
+                         END, MAX(fil.cb_inv_line_item_to_ts) OVER (PARTITION BY s.cb_subscr_id))AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_end_dt
+         , CASE
+               WHEN p.cb_plan_id NOT IN ('logbook_b2c-one_time_buy-eur','logbook_b2c-from_rent2buy-eur') -- one time products
+               -- AND i.cb_inv_total >0  -- only invoices with value
+               -- AND fil.cb_inv_line_item_amount >0  -- only products with value, no addons
+                   THEN TRUE
+               ELSE FALSE
+        END AS subscription_has_recurring_product -- exclude 1 time purchases, non-recurring ones
+    FROM dwh_main.dim_cb_subscription s
+             JOIN dwh_main.dim_cb_customer c
+                  ON s.cb_subscr_customer_id = c.cb_cust_id
+             JOIN dwh_main.dim_cb_plan p
+                  ON p.cb_plan_id = s.cb_subscr_plan_id
+             LEFT JOIN dwh_main.fact_cb_invoice_line_item fil
+                       ON s.cb_subscr_key = fil.cb_subscr_key
+             LEFT JOIN dwh_main.dim_cb_invoice i
+                       ON i.cb_inv_key = fil.cb_inv_key
+             LEFT JOIN (SELECT
+                            cb_event_type_id AS subscription_id
+                             , MIN(cb_event_occurred_ts) AS event_subscr_cancelled_ts
+                        FROM dwh_main.dim_cb_event
+                        WHERE cb_event_type = 'subscription_cancelled'
+                        GROUP BY cb_event_type_id) e
+                       ON e.subscription_id = s.cb_subscr_id
+    WHERE 1=1
+      AND coalesce(s.cb_subscr_is_deleted,FALSE) != TRUE
+      AND coalesce(i.cb_inv_is_deleted,FALSE) != TRUE
+      AND c.cb_cust_email NOT LIKE '%@vimcar%'
+      AND c.cb_cust_email NOT LIKE '%@internal.vimcar%'
+      AND cb_inv_customer_id = '10923834'
+--       AND fil.cb_inv_line_item_entity_id NOT LIKE 'hardware%'
+--       AND fil.cb_inv_line_item_entity_id NOT LIKE 'addon%'
+--       AND fil.cb_inv_line_item_entity_id NOT LIKE 'trial%'
+--       AND cb_inv_line_item_id IS NOT NULL
+--     AND cb_inv_customer_id = '30000866540' -- multiple invoices + one CN
+--     AND cb_inv_customer_id = '30000673905'  -- find the credit note 80
+--     AND cb_plan_id LIKE '%year%'
+--    AND i.cb_inv_id = 'I-2021-01-215460'
+-- AND cb_inv_customer_id = '30004929559' -- UK quarterly, good for checking as it "paused" in May for a month due to goodwill of Ops
+--       AND cb_inv_customer_id = '30005149714' -- UK quarterly, good for checking as it starts on 1st of month
+
+    UNION ALL
+-- UK invoices not imported into CB: https://docs.google.com/spreadsheets/u/1/d/14PAZ_eMNi8WAAkxC7rjbqBMsYFEFt0jbEtUfLqozi1k/edit#gid=0
+    SELECT
+        u.customer_id
+         , u.subscription_id AS subscription_id
+         , u.subscription_status
+         , (u.subscription_started_ts AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_start_dt
+         , NULL AS subscription_coupon_1
+         , NULL AS subscription_coupon_2
+         , (u.subscription_cancelled_ts AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_cancelled_dt
+         , CASE WHEN u.subscription_id IN ('non_renewing','cancelled')THEN 'n/a' END AS subscription_cancellation_reason
+         , (u.subscription_started_ts AT TIME ZONE 'Europe/Berlin' + (p.cb_plan_duration_months * INTERVAL '1 month'))::DATE AS subscription_end_dt
+         , TRUE AS subscription_has_recurring_product
+    FROM dwh_main.umd_uk_invoices_not_imported_to_chargebee u
+             JOIN dwh_main.dim_cb_plan p
+                  ON p.cb_plan_id = u.plan_id
+    WHERE NOT exists (SELECT 1 FROM dwh_main.dim_cb_invoice i WHERE i.cb_inv_id = u.invoice_id)
+    and false
 )
-   , customer_product AS (
+   , chargebee_subscriptions AS (
+    SELECT subscription_id
+         , customer_id
+         , subscription_status
+         , subscription_start_dt
+         , subscription_coupon_1
+         , subscription_coupon_2
+         , subscription_cancelled_dt
+         , subscription_cancellation_reason
+         , subscription_end_dt
+         , true = ANY(ARRAY_AGG(subscription_has_recurring_product)) AS subscription_has_recurring_product
+--      , string_agg(DISTINCT subscription_id_cb::TEXT, ',') AS cb_subscription_id
+    FROM cb_subs_precalculation
+    WHERE subscription_start_dt IS NOT NULL
+      AND subscription_end_dt IS NOT NULL
+    GROUP BY subscription_id, customer_id, subscription_status, subscription_start_dt, subscription_coupon_1, subscription_coupon_2, subscription_cancelled_dt, subscription_cancellation_reason, subscription_end_dt
+)
+--------------------------------------------------------------------------------
+----- SHOP subscriptions calculation:
+--------------------------------------------------------------------------------
+   , plan_map AS (SELECT cb_plan_id, MD5(cb_plan_id)::TEXT AS cb_plan_id_map
+                  FROM dwh_main.dim_cb_plan
+                  UNION
+                  SELECT cb_addon_id AS cb_plan_id, MD5(cb_addon_id)::TEXT AS cb_plan_id_map
+                  FROM dwh_main.dim_cb_addon)
+   , cte_invoice_raw AS (
     SELECT
         c.customer_id
-         , ctr.contract_id
-         , upm.product_uuid AS current_product_uuid
-         , upm.product_family AS current_product_family
-         , upm.product_name AS current_product_name
-         , upm.product_created_dt AS current_product_created_dt
-         , upm.product_note AS current_product_note
-         , upm.product_price_net AS current_product_price_net
-         , CASE WHEN upm.product_price_net = p.max_price_net THEN TRUE ELSE FALSE END AS current_price_is_max_price_for_the_product
-         , upm2.product_uuid AS future_product_uuid
-         , upm2.product_name AS future_product_name
-         , upm2.product_created_dt AS future_product_created_dt
-         , upm2.product_note AS future_product_note
-         , upm2.product_price_net AS future_product_price_net
-    FROM dwh_main.dim_customer c
+--          , ctr.contract_id  -- COMMENT THIS ONCE MIGRATION STARTS!! MAKE SURE ALL PRODUCTS ARE MAPPED
+         , CASE
+               WHEN cb.cb_cust_id IS NULL
+                   OR pm.cb_plan_id_map IS NULL THEN ctr.contract_id
+               ELSE ctr.contract_id ||'_'|| pm.cb_plan_id_map
+        END AS contract_id  -- UNCOMMENT THIS ONCE MIGRATION STARTS!! MAKE SURE ALL PRODUCTS ARE MAPPED
+         , CASE
+               WHEN ctr.contract_status = 'active'
+                   AND MAX(o.order_provisioning_end_ts) OVER (PARTITION BY ctr.contract_id) ::DATE < current_date - INTERVAL '6 months'
+                   THEN 0 -- 'cancelled'
+               WHEN ctr.contract_status = 'terminated'
+                   THEN 0 --'cancelled'
+               WHEN ctr.contract_status = 'canceled'
+                   THEN 1 --'non-renewing'
+               WHEN ctr.contract_status = 'active'
+                   THEN 2 -- active
+        END AS contract_status_map
+         , (o.order_provisioning_start_ts AT TIME ZONE 'Europe/Berlin')::DATE                                 AS order_provisioning_start_dt
+         , (o.order_provisioning_end_ts AT TIME ZONE 'Europe/Berlin')::DATE                                   AS order_provisioning_end_dt
+         , o.order_has_full_refund
+         , upm.monthly_payment
+         , CASE WHEN upm.product_name LIKE '%3-jährige Laufzeit%' THEN TRUE ELSE FALSE END AS three_year_contract
+         , CASE
+               WHEN foi.order_item_total_price_net_amt > 0 AND (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE)
+                   THEN TRUE
+               ELSE FALSE
+        END AS is_mrr_relevant-- 20210826
+         , CASE
+               WHEN contract_status != 'active'
+                   OR MAX(o.order_provisioning_end_ts) OVER (PARTITION BY ctr.contract_id) ::DATE < current_date - INTERVAL '6 months'
+                   THEN coalesce(contract_canceled_date_key, contract_modified_ts AT TIME ZONE 'Europe/Berlin')
+        END::DATE AS contract_terminated_dt
+         , CASE WHEN (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE) THEN TRUE ELSE FALSE END AS is_recurring_product
+    FROM dwh_main.fact_order_item foi
+             JOIN dwh_main.dim_order o
+                  ON o.order_key = foi.order_key
+             JOIN dwh_main.umd_product_map upm
+                  ON foi.order_item_product_key = upm.product_key
+             JOIN dwh_main.dim_customer c
+                  ON o.customer_uuid = c.customer_uuid
              JOIN dwh_main.dim_contract ctr
-                  ON ctr.customer_uuid = c.customer_uuid
-             JOIN dwh_main.fact_contract_line fcl
-                  ON ctr.contract_key = fcl.contract_key
-             JOIN cte_product upm
-                  ON upm.product_key = fcl.contract_item_product_key
-             LEFT JOIN cte_product upm2
-                       ON upm2.product_name = upm.product_name
-                           AND upm2.product_length_and_payment = upm.product_length_and_payment
-                           AND upm2.is_recurring = upm.is_recurring
-                           AND upm2.is_subsequent_recurring = upm.is_subsequent_recurring
-                           AND upm2.product_is_shippable = upm.product_is_shippable
-                           AND upm2.product_is_for_sale = upm.product_is_for_sale
-                           AND upm2.product_weight = upm.product_weight
-                           AND upm2.product_uuid <> upm.product_uuid
-                           AND upm2.product_price_net > upm.product_price_net
-                           AND upm2.product_tax <> 0.16
-             LEFT JOIN
-         (SELECT product_name, MAX(product_price_net) AS max_price_net
-          FROM cte_product
-          GROUP BY product_name) p
-         ON p.product_name = upm.product_name
-
-             LEFT JOIN dwh_main.umd_sales_price_increase_batch b
-                       ON b.contract_id = ctr.contract_id
-    WHERE fcl.opcode <> 'D'
-      AND batch_name like '%Feb%' AND batch_name like '%B2B%'
-    --     AND ctr.contract_id = 'V12127102'
+                  ON ctr.contract_uuid = o.contract_uuid
+             LEFT JOIN plan_map pm
+                       ON pm.cb_plan_id = upm.cb_plan_id
+             LEFT JOIN dwh_main.dim_cb_customer cb
+                       ON cb.cb_cust_cf_kundennummer = c.customer_id
+    WHERE foi.opcode != 'D'
+      AND o.order_id <> 'a99d4f2d-cfb4-4c86-b358-4aeb0b1b5f3d' -- incorrectly created order
+--       AND (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE)  -- not relevant, checked on 2021-10-11
+--         AND c.customer_id = 'K76310569' -- 3 years contract, good for checking the subscription end date (should be Dec'22)
+--       AND foi.order_item_total_price_net_amt > 0
+--     AND customer_id = '74879770' -- good for checking the subscription end date (2 contracts, yearly billing)
+--     and contract_id = '99664692'
+      AND customer_id = '10923834'
+--        and customer_id = 'K78487906'  -- 2 contracts, 1 is Abgeltung
 )
---    SELECT * FROM customer_product; -- CHECK CUSTOMERS
-   , cte_1 AS (SELECT DISTINCT
-                   current_product_uuid
-                             , current_product_family
-                             , current_product_name
-                             , current_product_created_dt
-                             , current_product_note
-                             , current_product_price_net
-                             , current_price_is_max_price_for_the_product
-/*
-IMPORTANT NOTE:
-1. When running mapping for B2C uncomment B2C mapping and comment out the B2B part.
-2. When running mapping for B2B uncomment B2B mapping and comment out the B2C part.
-*/                             , CASE
-        -- B2C mapped in October https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=278718204
---                                    WHEN current_product_uuid = '4914d433-88cd-4b2e-bbbe-39624e2d7bc6' THEN '061928ea-042b-4182-a1fe-a711f5134389'
---                                    WHEN current_product_uuid = '7fb84572-05ac-4c94-ae9b-f3fcf07c2cf5' THEN '061928ea-042b-4182-a1fe-a711f5134389'
---                                    WHEN current_product_uuid = '83d52040-6f87-428c-83f8-32eb853b6d22' THEN 'b16a5957-b5d1-4b2f-860b-331c25fe2989'
---                                    WHEN current_product_uuid = 'c0e8ec1d-9f72-4309-a377-f5ca0508644f' THEN '0a64e2b9-406c-4810-a3d2-c9d67dc95b89'
---                                    WHEN current_product_uuid = 'efcab066-7216-4948-a765-99d82ba44566' THEN '061928ea-042b-4182-a1fe-a711f5134389'
---                                    WHEN current_product_uuid = '7fb84572-05ac-4c94-ae9b-f3fcf07c2cf5' THEN '061928ea-042b-4182-a1fe-a711f5134389' -- sheet B2C renewal Jan'22
---                                    WHEN current_product_uuid = '576a7be3-004b-410e-b20d-633a1c177120' THEN '061928ea-042b-4182-a1fe-a711f5134389' -- sheet B2C renewal Jan'22
-        -- B2B mapped in October https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=278718204
-                                     WHEN current_product_uuid = '0c809251-a8d4-4d54-a681-41839f022ef5' THEN '65a0bfd5-d789-4a7e-aad2-9787d1f1048e'
-                                     WHEN current_product_uuid = '1c2891ea-2d8d-464b-8f3a-9d22f2ed42d0' THEN '7d6fb064-5df7-4858-b543-bf4cd612897a'
-                                     WHEN current_product_uuid = '2ee2f831-999c-44b9-a6ca-66da41bfbfdb' THEN '47d0bd5b-fdaa-492e-90d7-20df81940aea'
-                                     WHEN current_product_uuid = '3b94b261-f47a-4393-9faf-a298543664ac' THEN '65a0bfd5-d789-4a7e-aad2-9787d1f1048e'
-                                     WHEN current_product_uuid = '44f7e2e7-8e5d-4604-a107-56a10e31a021' THEN 'f0622671-3256-41b0-9a49-aee469973257'
-                                     WHEN current_product_uuid = '4914d433-88cd-4b2e-bbbe-39624e2d7bc6' THEN '65a0bfd5-d789-4a7e-aad2-9787d1f1048e'
-                                     WHEN current_product_uuid = '68c0319d-36ca-4731-af05-4d9ff589d99b' THEN '83bc9af9-cc35-4d7e-ab84-e49fc1cea89d'
-                                     WHEN current_product_uuid = '726bc39b-c3c1-48f0-8544-c391427eaad5' THEN '552a3e33-c99b-49db-a01c-fe949e73508a'
-                                     WHEN current_product_uuid = '7fb84572-05ac-4c94-ae9b-f3fcf07c2cf5' THEN '65a0bfd5-d789-4a7e-aad2-9787d1f1048e'
-                                     WHEN current_product_uuid = '8a85301e-df82-437f-9b96-11eb46420ae4' THEN 'dedbe9ed-b0c7-4746-814f-97bbd1c5ba69'
-                                     WHEN current_product_uuid = 'c0e8ec1d-9f72-4309-a377-f5ca0508644f' THEN 'f0622671-3256-41b0-9a49-aee469973257'
-                                     WHEN current_product_uuid = 'cee04f53-d490-4c5e-ad43-ca76f5533b5f' THEN '8c864718-f6cf-4cd9-8fda-71b7aed4fec6'
-                                     WHEN current_product_uuid = 'd4bab2dd-1dd4-466e-8a26-3ac5ba984eb0' THEN 'e9ff0a5f-fb44-4b2b-8a05-72896f09bdf5'
-                                     WHEN current_product_uuid = 'f2fffb32-6a5a-4a67-908b-cdc52f09fee9' THEN '9b892ebc-6f1a-4cab-a95e-cac364fd6d49'
-        -- B2B mapped in November https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=482325070
-                                     WHEN current_product_uuid = '408a0153-5567-452c-a10e-242f6fabaaf4' THEN '5fc29394-7dcb-4535-9641-5dfbdc503f80'
-                                     WHEN current_product_uuid = 'ade12889-23be-40fa-895a-52cd7b8e0891' THEN 'f0622671-3256-41b0-9a49-aee469973257'
-        -- B2B mapped in December https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=643694551
-                                     WHEN current_product_uuid = '9f5feb96-ad9d-462b-9060-ddfc508fc190' THEN '2d7da6f5-8539-40bc-b740-fb99ecb76113'
-                                     WHEN current_product_uuid = 'e9ff0a5f-fb44-4b2b-8a05-72896f09bdf5' THEN 'e9ff0a5f-fb44-4b2b-8a05-72896f09bdf5'  -- we keep the same product here
-                                     WHEN current_product_uuid = '77723376-b408-4508-84eb-425be417cc0c' THEN '7df58396-d3ac-46ba-8251-ab1353270a4d'
-                                     ELSE future_product_uuid
-        END AS future_product_uuid
-                             , future_product_name
-                             , future_product_created_dt
-                             , future_product_note
-                             , future_product_price_net
-               FROM customer_product cp)
-/*
--- This is the part for getting contracts with products which need to be changed in Shop:
--- https://docs.google.com/spreadsheets/d/1_iiImHOuVW6OjESbl5z9g5jXr0IziKGHgJ9PQ0Vqs8g/edit#gid=1894814752
-SELECT DISTINCT contract_id --, current_product_uuid, current_product_name
-FROM customer_product
-WHERE current_product_uuid IN (
-                               '1c2891ea-2d8d-464b-8f3a-9d22f2ed42d0',
-                               '20b37a3e-a7c6-4431-a7ff-d048e9a8bcb1',
-                               '2536704b-2cd1-43d9-8b8e-3d291944287b',
-                               '3b94b261-f47a-4393-9faf-a298543664ac',
-                               '412aeaed-cb2a-440b-b7c9-04b0781136a4',
-                               '44f7e2e7-8e5d-4604-a107-56a10e31a021',
-                               '4914d433-88cd-4b2e-bbbe-39624e2d7bc6',
-                               '576a7be3-004b-410e-b20d-633a1c177120',
-                               '726bc39b-c3c1-48f0-8544-c391427eaad5',
-                               '7df58396-d3ac-46ba-8251-ab1353270a4d',
-                               '7fb84572-05ac-4c94-ae9b-f3fcf07c2cf5',
-                               'c0e8ec1d-9f72-4309-a377-f5ca0508644f',
-                               'cee04f53-d490-4c5e-ad43-ca76f5533b5f',
-                               'd4bab2dd-1dd4-466e-8a26-3ac5ba984eb0',
-                               'f2fffb32-6a5a-4a67-908b-cdc52f09fee9'
-    )
+--    SELECT * FROM cte_invoice_raw;
+   , cte_1 AS (
+    SELECT
+        cte_invoice_raw.*
+--          , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY domain_name)  AS first_order_dt
+--          , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE AND product_length_and_payment LIKE '3%') OVER (PARTITION BY contract_id) AS first_3y_order_dt
+--          , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY domain_name), MAX(order_provisioning_end_dt) OVER (PARTITION BY customer_id)) AS valid_to_dt
+         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY customer_id) AS first_order_dt
+         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY contract_id) AS first_order_dt_contract_lvl
+         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE AND three_year_contract = True) OVER (PARTITION BY contract_id) AS first_3y_order_dt_contract_lvl
+         , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY customer_id)
+        , MAX(order_provisioning_end_dt) OVER (PARTITION BY customer_id)) AS valid_to_dt
+         , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE is_mrr_relevant = TRUE) OVER (PARTITION BY contract_id)
+        , MAX(order_provisioning_end_dt) OVER (PARTITION BY contract_id)) AS valid_to_dt_contract_lvl -- 20210831
+    FROM cte_invoice_raw
+)
+-- select * from cte_1;
+   , cte_2 AS (
+    SELECT
+        contract_id                                                                                AS subscription_id
+         , coalesce(cb.cb_cust_id, customer_id)                                                    AS customer_id
+         , CASE
+               WHEN contract_status_map = 0 THEN 'cancelled'
+               WHEN contract_status_map = 1 THEN 'non_renewing'
+               WHEN contract_status_map = 2 THEN 'active'
+        END                                                                                    AS subscription_status
+         , MIN(order_provisioning_start_dt)                                                        AS subscription_start_dt
+         , contract_terminated_dt                                                                  AS subscription_cancelled_dt
+         , coalesce(
+                    MIN(CASE WHEN three_year_contract = TRUE
+                AND first_3y_order_dt_contract_lvl + INTERVAL '3 years' > current_date
+                                 THEN first_3y_order_dt_contract_lvl + INTERVAL '3 years'
+                             WHEN monthly_payment = FALSE
+                                 AND order_has_full_refund = FALSE
+                                 THEN valid_to_dt_contract_lvl
+                             WHEN monthly_payment = TRUE
+                                 THEN first_order_dt_contract_lvl + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',first_order_dt_contract_lvl) + INTERVAL '1 day'))
+                                 + extract(month from age(date_trunc('month',current_date), date_trunc('month',first_order_dt_contract_lvl) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
+                             ELSE valid_to_dt_contract_lvl END::DATE)
+                    FILTER ( WHERE contract_status_map = 2 AND valid_to_dt_contract_lvl >= current_date )
+        , '1999-01-01') AS tmp_subscription_end_dt
+         , valid_to_dt_contract_lvl
+         , true = ANY(ARRAY_AGG(is_recurring_product)) AS subscription_has_recurring_product
+    FROM cte_1 c1
+             LEFT JOIN dwh_main.dim_cb_customer cb
+                       ON cb.cb_cust_cf_kundennummer = c1.customer_id
+    GROUP BY cb.cb_cust_id, customer_id, contract_id, contract_status_map, contract_terminated_dt, valid_to_dt, valid_to_dt_contract_lvl,first_order_dt_contract_lvl
+)
+-- SELECT * FROM cte_2;
+   , shop_subscriptions AS (
+    SELECT
+        subscription_id
+         , customer_id
+         , subscription_status
+         , subscription_start_dt
+         , lower(ctr.coupon_code) AS subscription_coupon_1
+         , NULL AS subscription_coupon_2
+         , subscription_cancelled_dt
+         , CASE WHEN subscription_cancelled_dt IS NOT NULL THEN coalesce(ctr.contract_cancelation_reason, 'n/a') END AS subscription_cancellation_reason
+         , CASE
+               WHEN valid_to_dt_contract_lvl < subscription_start_dt + INTERVAL '360 days'
+                   THEN  subscription_start_dt + INTERVAL '1 year'
+               WHEN ABS(ctr.contract_provisioning_end_date_key -
+                        CASE WHEN valid_to_dt_contract_lvl > tmp_subscription_end_dt THEN valid_to_dt_contract_lvl ELSE tmp_subscription_end_dt END ) < 6  -- in case there is max 5 days difference between contract end date and calculated subscription_end_dt then we take the contract end date from the Shop
+                   THEN ctr.contract_provisioning_end_date_key
+               ELSE CASE WHEN valid_to_dt_contract_lvl > tmp_subscription_end_dt THEN valid_to_dt_contract_lvl ELSE tmp_subscription_end_dt END
+        END::DATE AS subscription_end_dt
+         , subscription_has_recurring_product
+    FROM cte_2 c2
+             LEFT JOIN dwh_main.dim_contract ctr
+                       ON ctr.contract_id = c2.subscription_id
+)
+SELECT * FROM chargebee_subscriptions
+UNION ALL
+SELECT * FROM shop_subscriptions
+-- we need to filter out the migrated Sop subscriptions which got reactivated in Chargebee after migration, ex. V66509368_8294003f207242cdc1babe5d3d987c7f
+WHERE NOT EXISTS(SELECT 1 FROM chargebee_subscriptions cb WHERE cb.subscription_id = shop_subscriptions.subscription_id )
+
 ;
-*/
-SELECT DISTINCT
-    current_product_uuid
-              , current_product_family
-              , current_product_name
-              , current_product_created_dt
-              , current_product_note
-              , current_product_price_net
-              , current_price_is_max_price_for_the_product
-              , future_product_uuid
-              , coalesce(cp.product_name, future_product_name) AS future_product_name  -- product mapped in the past has priority
-              , coalesce(cp.product_created_dt, future_product_created_dt) AS future_product_created_dt
-              , coalesce(cp.product_note, future_product_note) AS future_product_note
-              , coalesce(cp.product_price_net, future_product_price_net) AS future_product_price_net
-FROM cte_1 c1
-         LEFT JOIN cte_product cp
-                   ON cp.product_uuid = c1.future_product_uuid
-ORDER BY current_product_uuid;
