@@ -1,252 +1,117 @@
---------------------------------------------------------------------------------
------ Chargebee subscriptions calculation:
---------------------------------------------------------------------------------
-WITH cb_subs_precalculation AS (
-    SELECT
-        s.cb_subscr_customer_id                                                                               AS customer_id
-         , s.cb_subscr_id                                                                                     AS subscription_id
-         , s.cb_subscr_status                                                                                 AS subscription_status
-         , (coalesce(s.cb_subscr_started_ts, s.cb_subscr_next_billing_ts
-                , MIN(fil.cb_inv_line_item_from_ts) OVER (PARTITION BY s.cb_subscr_id)) AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_start_dt
-         , lower(s.cb_subscr_coupons -> 0 ->> 'coupon_id') AS subscription_coupon_1
-         , lower(s.cb_subscr_coupons -> 1 ->> 'coupon_id') AS subscription_coupon_2
-         , CASE
-               WHEN s.cb_subscr_status IN ('non_renewing','cancelled')
-                   THEN coalesce(e.event_subscr_cancelled_ts, cb_subscr_cancelled_ts, cb_subscr_updated_ts) AT TIME ZONE 'Europe/Berlin'
-        END::DATE                                                                                          AS subscription_cancelled_dt
-         , CASE
-               WHEN s.cb_subscr_status IN ('non_renewing','cancelled')
-                   THEN coalesce(s.cb_subscr_cancel_reason_code, 'n/a')
-        END AS subscription_cancellation_reason
-         , (coalesce(CASE
-                         WHEN s.cb_subscr_status = 'future'
-                             THEN s.cb_subscr_next_billing_ts + (p.cb_plan_duration_months * INTERVAL '1 month')
-                         WHEN s.cb_subscr_remaining_billing_cycles > 0
-                             AND s.cb_subscr_billing_period_unit = 'month'
-                             THEN cb_subscr_current_term_end_ts + (s.cb_subscr_billing_period * s.cb_subscr_remaining_billing_cycles * INTERVAL '1 month')
-                         WHEN s.cb_subscr_remaining_billing_cycles > 0
-                             AND s.cb_subscr_billing_period_unit = 'year'
-                             THEN cb_subscr_current_term_end_ts + (s.cb_subscr_billing_period * s.cb_subscr_remaining_billing_cycles * INTERVAL '1 year')
-                         END, MAX(fil.cb_inv_line_item_to_ts) OVER (PARTITION BY s.cb_subscr_id))AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_end_dt
-         , CASE
-               WHEN p.cb_plan_id NOT IN ('logbook_b2c-one_time_buy-eur','logbook_b2c-from_rent2buy-eur') -- one time products
-               -- AND i.cb_inv_total >0  -- only invoices with value
-               -- AND fil.cb_inv_line_item_amount >0  -- only products with value, no addons
-                   THEN TRUE
-               ELSE FALSE
-        END AS subscription_has_recurring_product -- exclude 1 time purchases, non-recurring ones
-    FROM dwh_main.dim_cb_subscription s
-             JOIN dwh_main.dim_cb_customer c
-                  ON s.cb_subscr_customer_id = c.cb_cust_id
-             JOIN dwh_main.dim_cb_plan p
-                  ON p.cb_plan_id = s.cb_subscr_plan_id
-             LEFT JOIN dwh_main.fact_cb_invoice_line_item fil
-                       ON s.cb_subscr_key = fil.cb_subscr_key
-             LEFT JOIN dwh_main.dim_cb_invoice i
-                       ON i.cb_inv_key = fil.cb_inv_key
-             LEFT JOIN (SELECT
-                            cb_event_type_id AS subscription_id
-                             , MIN(cb_event_occurred_ts) AS event_subscr_cancelled_ts
-                        FROM dwh_main.dim_cb_event
-                        WHERE cb_event_type = 'subscription_cancelled'
-                        GROUP BY cb_event_type_id) e
-                       ON e.subscription_id = s.cb_subscr_id
-    WHERE 1=1
-      AND coalesce(s.cb_subscr_is_deleted,FALSE) != TRUE
-      AND coalesce(i.cb_inv_is_deleted,FALSE) != TRUE
-      AND c.cb_cust_email NOT LIKE '%@vimcar%'
-      AND c.cb_cust_email NOT LIKE '%@internal.vimcar%'
-      AND cb_inv_customer_id = '10923834'
---       AND fil.cb_inv_line_item_entity_id NOT LIKE 'hardware%'
---       AND fil.cb_inv_line_item_entity_id NOT LIKE 'addon%'
---       AND fil.cb_inv_line_item_entity_id NOT LIKE 'trial%'
---       AND cb_inv_line_item_id IS NOT NULL
---     AND cb_inv_customer_id = '30000866540' -- multiple invoices + one CN
---     AND cb_inv_customer_id = '30000673905'  -- find the credit note 80
---     AND cb_plan_id LIKE '%year%'
---    AND i.cb_inv_id = 'I-2021-01-215460'
--- AND cb_inv_customer_id = '30004929559' -- UK quarterly, good for checking as it "paused" in May for a month due to goodwill of Ops
---       AND cb_inv_customer_id = '30005149714' -- UK quarterly, good for checking as it starts on 1st of month
-
-    UNION ALL
--- UK invoices not imported into CB: https://docs.google.com/spreadsheets/u/1/d/14PAZ_eMNi8WAAkxC7rjbqBMsYFEFt0jbEtUfLqozi1k/edit#gid=0
-    SELECT
-        u.customer_id
-         , u.subscription_id AS subscription_id
-         , u.subscription_status
-         , (u.subscription_started_ts AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_start_dt
-         , NULL AS subscription_coupon_1
-         , NULL AS subscription_coupon_2
-         , (u.subscription_cancelled_ts AT TIME ZONE 'Europe/Berlin')::DATE AS subscription_cancelled_dt
-         , CASE WHEN u.subscription_id IN ('non_renewing','cancelled')THEN 'n/a' END AS subscription_cancellation_reason
-         , (u.subscription_started_ts AT TIME ZONE 'Europe/Berlin' + (p.cb_plan_duration_months * INTERVAL '1 month'))::DATE AS subscription_end_dt
-         , TRUE AS subscription_has_recurring_product
-    FROM dwh_main.umd_uk_invoices_not_imported_to_chargebee u
-             JOIN dwh_main.dim_cb_plan p
-                  ON p.cb_plan_id = u.plan_id
-    WHERE NOT exists (SELECT 1 FROM dwh_main.dim_cb_invoice i WHERE i.cb_inv_id = u.invoice_id)
-    and false
+WITH cte_domains AS (
+    SELECT d.domain_name
+         , COALESCE(mcpd.map_fb_domain_name,d.domain_name) AS map_principal_domain
+         , COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) AS map_principal_main_domain
+         , d.valid_from_ts::DATE AS valid_from_ts
+         , d.valid_to_ts::DATE AS valid_to_ts
+         , dt.date_key
+         , c.customer_status
+         , c.customer_is_fleet
+         , c.min_subscription_start_dt
+         , domain_contract_status
+         , domain_contract_type
+         , domain_user_type
+         , first_usage_date_key
+         , domain_is_active
+         , domain_active_car_amt
+         , domain_uses_booking_ft
+         , domain_uses_contract_ft
+         , domain_uses_cost_ft
+         , domain_uses_cust_property_ft
+         , domain_uses_group_ft
+         , domain_uses_documents_ft
+         , domain_uses_private_mode_ft
+         , domain_uses_vehicle_search_ft
+         , domain_uses_address_vis_delay_ft
+         , domain_uses_logbook_vis_delay_ft
+         , domain_uses_logbook_ft
+         , domain_uses_vehicle_localisation_ft
+         , domain_uses_lapid_plus_ft
+         , domain_uses_manual_dl_check_ft
+         , domain_uses_route_documentation_usage_ft
+         , domain_uses_route_documentation_ft
+         , domain_uses_geo_time_fencing_ft
+         , domain_uses_geo_time_fencing_activated_ft
+         , domain_uses_pin_ft
+         , domain_uses_events_route_documentation_usage_ft
+         , domain_uses_events_vehicle_localisation_usage_ft
+         , domain_uses_task_ft
+    FROM dwh_main.dim_domain_scd2 d
+             JOIN dwh_main.dim_date dt
+                  ON dt.date_key >= d.valid_from_ts::DATE
+                      AND dt.date_key <= d.valid_to_ts::DATE
+             LEFT JOIN dwh_main.map_customer_to_foxbox_domain mcpd
+                       ON mcpd.map_customer_domain_name = d.domain_name
+                           AND record_nbr_per_customer_id = 1
+             LEFT JOIN dwh_main.dim_combined_customer c
+                       ON c.customer_id = mcpd.map_unified_customer_id -- (CB or Shop customer ID, depending on if already migrated or not)
+    WHERE TRUE
+      AND dt.date_key BETWEEN current_date - 5 AND current_date
+      AND NOT EXISTS (SELECT domain_name
+                      FROM dwh_main.dim_domain_scd2 t
+                      WHERE is_last_version = TRUE
+                        AND domain_is_test_domain = TRUE
+                        AND t.domain_name = d.domain_name
+                      GROUP BY domain_name)
+      AND COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) != 'com.vimcar'
+-- sample problematic customer, domains mismatch: FOXBOX: 'com.vimcar.foodspring-gmbh' | SHOP: 'com.vimcar.de.k96844926'
+--     AND d.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
+--       AND d.domain_name = 'com.vimcar.gb.a19b21c13db0492e81ed392f85d6510c'
+    AND domain_name = 'com.vimcar.de.k19726759'
 )
-   , chargebee_subscriptions AS (
-    SELECT subscription_id
-         , customer_id
-         , subscription_status
-         , subscription_start_dt
-         , subscription_coupon_1
-         , subscription_coupon_2
-         , subscription_cancelled_dt
-         , subscription_cancellation_reason
-         , subscription_end_dt
-         , true = ANY(ARRAY_AGG(subscription_has_recurring_product)) AS subscription_has_recurring_product
---      , string_agg(DISTINCT subscription_id_cb::TEXT, ',') AS cb_subscription_id
-    FROM cb_subs_precalculation
-    WHERE subscription_start_dt IS NOT NULL
-      AND subscription_end_dt IS NOT NULL
-    GROUP BY subscription_id, customer_id, subscription_status, subscription_start_dt, subscription_coupon_1, subscription_coupon_2, subscription_cancelled_dt, subscription_cancellation_reason, subscription_end_dt
-)
---------------------------------------------------------------------------------
------ SHOP subscriptions calculation:
---------------------------------------------------------------------------------
-   , plan_map AS (SELECT cb_plan_id, MD5(cb_plan_id)::TEXT AS cb_plan_id_map
-                  FROM dwh_main.dim_cb_plan
-                  UNION
-                  SELECT cb_addon_id AS cb_plan_id, MD5(cb_addon_id)::TEXT AS cb_plan_id_map
-                  FROM dwh_main.dim_cb_addon)
-   , cte_invoice_raw AS (
-    SELECT
-        c.customer_id
---          , ctr.contract_id  -- COMMENT THIS ONCE MIGRATION STARTS!! MAKE SURE ALL PRODUCTS ARE MAPPED
-         , CASE
-               WHEN cb.cb_cust_id IS NULL
-                   OR pm.cb_plan_id_map IS NULL THEN ctr.contract_id
-               ELSE ctr.contract_id ||'_'|| pm.cb_plan_id_map
-        END AS contract_id  -- UNCOMMENT THIS ONCE MIGRATION STARTS!! MAKE SURE ALL PRODUCTS ARE MAPPED
-         , CASE
-               WHEN ctr.contract_status = 'active'
-                   AND MAX(o.order_provisioning_end_ts) OVER (PARTITION BY ctr.contract_id) ::DATE < current_date - INTERVAL '6 months'
-                   THEN 0 -- 'cancelled'
-               WHEN ctr.contract_status = 'terminated'
-                   THEN 0 --'cancelled'
-               WHEN ctr.contract_status = 'canceled'
-                   THEN 1 --'non-renewing'
-               WHEN ctr.contract_status = 'active'
-                   THEN 2 -- active
-        END AS contract_status_map
-         , (o.order_provisioning_start_ts AT TIME ZONE 'Europe/Berlin')::DATE                                 AS order_provisioning_start_dt
-         , (o.order_provisioning_end_ts AT TIME ZONE 'Europe/Berlin')::DATE                                   AS order_provisioning_end_dt
-         , o.order_has_full_refund
-         , upm.monthly_payment
-         , CASE WHEN upm.product_name LIKE '%3-jährige Laufzeit%' THEN TRUE ELSE FALSE END AS three_year_contract
-         , CASE
-               WHEN foi.order_item_total_price_net_amt > 0 AND (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE)
-                   THEN TRUE
-               ELSE FALSE
-        END AS is_mrr_relevant-- 20210826
-         , CASE
-               WHEN contract_status != 'active'
-                   OR MAX(o.order_provisioning_end_ts) OVER (PARTITION BY ctr.contract_id) ::DATE < current_date - INTERVAL '6 months'
-                   THEN coalesce(contract_canceled_date_key, contract_modified_ts AT TIME ZONE 'Europe/Berlin')
-        END::DATE AS contract_terminated_dt
-         , CASE WHEN (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE) THEN TRUE ELSE FALSE END AS is_recurring_product
-    FROM dwh_main.fact_order_item foi
-             JOIN dwh_main.dim_order o
-                  ON o.order_key = foi.order_key
-             JOIN dwh_main.umd_product_map upm
-                  ON foi.order_item_product_key = upm.product_key
-             JOIN dwh_main.dim_customer c
-                  ON o.customer_uuid = c.customer_uuid
-             JOIN dwh_main.dim_contract ctr
-                  ON ctr.contract_uuid = o.contract_uuid
-             LEFT JOIN plan_map pm
-                       ON pm.cb_plan_id = upm.cb_plan_id
-             LEFT JOIN dwh_main.dim_cb_customer cb
-                       ON cb.cb_cust_cf_kundennummer = c.customer_id
-    WHERE foi.opcode != 'D'
-      AND o.order_id <> 'a99d4f2d-cfb4-4c86-b358-4aeb0b1b5f3d' -- incorrectly created order
---       AND (upm.is_recurring = TRUE OR upm.is_subsequent_recurring = TRUE)  -- not relevant, checked on 2021-10-11
---         AND c.customer_id = 'K76310569' -- 3 years contract, good for checking the subscription end date (should be Dec'22)
---       AND foi.order_item_total_price_net_amt > 0
---     AND customer_id = '74879770' -- good for checking the subscription end date (2 contracts, yearly billing)
---     and contract_id = '99664692'
-      AND customer_id = '10923834'
---        and customer_id = 'K78487906'  -- 2 contracts, 1 is Abgeltung
-)
---    SELECT * FROM cte_invoice_raw;
-   , cte_1 AS (
-    SELECT
-        cte_invoice_raw.*
---          , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY domain_name)  AS first_order_dt
---          , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE AND product_length_and_payment LIKE '3%') OVER (PARTITION BY contract_id) AS first_3y_order_dt
---          , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY domain_name), MAX(order_provisioning_end_dt) OVER (PARTITION BY customer_id)) AS valid_to_dt
-         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY customer_id) AS first_order_dt
-         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY contract_id) AS first_order_dt_contract_lvl
-         , MIN(order_provisioning_start_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE AND three_year_contract = True) OVER (PARTITION BY contract_id) AS first_3y_order_dt_contract_lvl
-         , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE order_has_full_refund = FALSE AND is_mrr_relevant = TRUE) OVER (PARTITION BY customer_id)
-        , MAX(order_provisioning_end_dt) OVER (PARTITION BY customer_id)) AS valid_to_dt
-         , coalesce(MAX(order_provisioning_end_dt) FILTER (WHERE is_mrr_relevant = TRUE) OVER (PARTITION BY contract_id)
-        , MAX(order_provisioning_end_dt) OVER (PARTITION BY contract_id)) AS valid_to_dt_contract_lvl -- 20210831
-    FROM cte_invoice_raw
-)
--- select * from cte_1;
-   , cte_2 AS (
-    SELECT
-        contract_id                                                                                AS subscription_id
-         , coalesce(cb.cb_cust_id, customer_id)                                                    AS customer_id
-         , CASE
-               WHEN contract_status_map = 0 THEN 'cancelled'
-               WHEN contract_status_map = 1 THEN 'non_renewing'
-               WHEN contract_status_map = 2 THEN 'active'
-        END                                                                                    AS subscription_status
-         , MIN(order_provisioning_start_dt)                                                        AS subscription_start_dt
-         , contract_terminated_dt                                                                  AS subscription_cancelled_dt
-         , coalesce(
-                    MIN(CASE WHEN three_year_contract = TRUE
-                AND first_3y_order_dt_contract_lvl + INTERVAL '3 years' > current_date
-                                 THEN first_3y_order_dt_contract_lvl + INTERVAL '3 years'
-                             WHEN monthly_payment = FALSE
-                                 AND order_has_full_refund = FALSE
-                                 THEN valid_to_dt_contract_lvl
-                             WHEN monthly_payment = TRUE
-                                 THEN first_order_dt_contract_lvl + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',first_order_dt_contract_lvl) + INTERVAL '1 day'))
-                                 + extract(month from age(date_trunc('month',current_date), date_trunc('month',first_order_dt_contract_lvl) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
-                             ELSE valid_to_dt_contract_lvl END::DATE)
-                    FILTER ( WHERE contract_status_map = 2 AND valid_to_dt_contract_lvl >= current_date )
-        , '1999-01-01') AS tmp_subscription_end_dt
-         , valid_to_dt_contract_lvl
-         , true = ANY(ARRAY_AGG(is_recurring_product)) AS subscription_has_recurring_product
-    FROM cte_1 c1
-             LEFT JOIN dwh_main.dim_cb_customer cb
-                       ON cb.cb_cust_cf_kundennummer = c1.customer_id
-    GROUP BY cb.cb_cust_id, customer_id, contract_id, contract_status_map, contract_terminated_dt, valid_to_dt, valid_to_dt_contract_lvl,first_order_dt_contract_lvl
-)
--- SELECT * FROM cte_2;
-   , shop_subscriptions AS (
-    SELECT
-        subscription_id
-         , customer_id
-         , subscription_status
-         , subscription_start_dt
-         , lower(ctr.coupon_code) AS subscription_coupon_1
-         , NULL AS subscription_coupon_2
-         , subscription_cancelled_dt
-         , CASE WHEN subscription_cancelled_dt IS NOT NULL THEN coalesce(ctr.contract_cancelation_reason, 'n/a') END AS subscription_cancellation_reason
-         , CASE
-               WHEN valid_to_dt_contract_lvl < subscription_start_dt + INTERVAL '360 days'
-                   THEN  subscription_start_dt + INTERVAL '1 year'
-               WHEN ABS(ctr.contract_provisioning_end_date_key -
-                        CASE WHEN valid_to_dt_contract_lvl > tmp_subscription_end_dt THEN valid_to_dt_contract_lvl ELSE tmp_subscription_end_dt END ) < 6  -- in case there is max 5 days difference between contract end date and calculated subscription_end_dt then we take the contract end date from the Shop
-                   THEN ctr.contract_provisioning_end_date_key
-               ELSE CASE WHEN valid_to_dt_contract_lvl > tmp_subscription_end_dt THEN valid_to_dt_contract_lvl ELSE tmp_subscription_end_dt END
-        END::DATE AS subscription_end_dt
-         , subscription_has_recurring_product
-    FROM cte_2 c2
-             LEFT JOIN dwh_main.dim_contract ctr
-                       ON ctr.contract_id = c2.subscription_id
-)
-SELECT * FROM chargebee_subscriptions
-UNION ALL
-SELECT * FROM shop_subscriptions
--- we need to filter out the migrated Sop subscriptions which got reactivated in Chargebee after migration, ex. V66509368_8294003f207242cdc1babe5d3d987c7f
-WHERE NOT EXISTS(SELECT 1 FROM chargebee_subscriptions cb WHERE cb.subscription_id = shop_subscriptions.subscription_id )
-
+SELECT
+    c1.map_principal_main_domain AS main_domain_name
+     , c1.date_key AS reporting_date
+     , CASE WHEN mds.match_to_contract IS NULL THEN FALSE ELSE mds.match_to_contract END AS match_to_contract
+     , MIN(coalesce(c1.min_subscription_start_dt, '2099-12-31')) AS contract_started_dt
+     , MIN(coalesce(c2.first_usage_date_key, c1.first_usage_date_key)) AS first_usage_dt
+     , MIN(c1.valid_from_ts) AS valid_from_dt
+     , MAX(c1.valid_to_ts) AS valid_to_dt
+     , MIN(coalesce(c1.domain_contract_status, c1.domain_contract_status)) AS domain_contract_status
+     , CASE WHEN mds.match_to_contract IS NOT NULL THEN 'Customer' ELSE 'Tester' END AS domain_contract_type
+--     , MIN(c1.domain_user_type) AS domain_user_type -- definition Product
+     , CASE WHEN true = ANY(ARRAY_AGG(c1.customer_is_fleet)) = TRUE THEN 'Fleet' ELSE 'Single' END AS domain_user_type -- definition BI and Management
+     --  , CASE WHEN SUM(CASE WHEN c1.domain_is_active = TRUE THEN 1 ELSE 0 END)>0 THEN TRUE ELSE FALSE END AS domain_is_active
+     , true = ANY(ARRAY_AGG(c1.domain_is_active)) AS domain_is_active
+     , MAX(coalesce(c2.domain_active_car_amt, c1.domain_active_car_amt))  AS domain_active_car_amt
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_booking_ft, c1.domain_uses_booking_ft))) AS domain_uses_booking_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_contract_ft, c1.domain_uses_contract_ft))) AS domain_uses_contract_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_cost_ft, c1.domain_uses_cost_ft))) AS domain_uses_cost_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_cust_property_ft, c1.domain_uses_cust_property_ft))) AS domain_uses_cust_property_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_group_ft, c1.domain_uses_group_ft))) AS domain_uses_group_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_documents_ft, c1.domain_uses_documents_ft))) AS domain_uses_documents_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_private_mode_ft, c1.domain_uses_private_mode_ft))) AS domain_uses_private_mode_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_vehicle_search_ft, c1.domain_uses_vehicle_search_ft))) AS domain_uses_vehicle_search_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_address_vis_delay_ft, c1.domain_uses_address_vis_delay_ft))) AS domain_uses_address_vis_delay_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_logbook_vis_delay_ft, c1.domain_uses_logbook_vis_delay_ft))) AS domain_uses_logbook_vis_delay_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_logbook_ft, c1.domain_uses_logbook_ft))) AS domain_uses_logbook_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_vehicle_localisation_ft, c1.domain_uses_vehicle_localisation_ft))) AS domain_uses_vehicle_localisation_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_lapid_plus_ft, c1.domain_uses_lapid_plus_ft))) AS domain_uses_lapid_plus_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_manual_dl_check_ft, c1.domain_uses_manual_dl_check_ft))) AS domain_uses_manual_dl_check_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_route_documentation_usage_ft, c1.domain_uses_route_documentation_usage_ft))) AS domain_uses_route_documentation_usage_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_route_documentation_ft, c1.domain_uses_route_documentation_ft))) AS domain_uses_route_documentation_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_geo_time_fencing_ft, c1.domain_uses_geo_time_fencing_ft))) AS domain_uses_geo_time_fencing_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_geo_time_fencing_activated_ft, c1.domain_uses_geo_time_fencing_activated_ft))) AS domain_uses_geo_time_fencing_activated_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_pin_ft, c1.domain_uses_pin_ft))) AS domain_uses_pin_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_events_route_documentation_usage_ft, c1.domain_uses_events_route_documentation_usage_ft))) AS domain_uses_events_route_documentation_usage_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_events_vehicle_localisation_usage_ft, c1.domain_uses_events_vehicle_localisation_usage_ft))) AS domain_uses_events_vehicle_localisation_usage_ft
+     , true = ANY(ARRAY_AGG(coalesce(c2.domain_uses_task_ft, c1.domain_uses_task_ft))) AS domain_uses_task_ft
+     -- product fields:
+     , true = ANY(ARRAY_AGG(mds.md_has_logbook_non_fleet)) AS md_has_logbook_non_fleet
+     , true = ANY(ARRAY_AGG(mds.md_has_fleet_logbook)) AS md_has_fleet_logbook
+     , true = ANY(ARRAY_AGG(mds.md_has_fleet_admin)) AS md_has_fleet_admin
+     , true = ANY(ARRAY_AGG(mds.md_has_fleet_geo)) AS md_has_fleet_geo
+     , true = ANY(ARRAY_AGG(mds.md_has_fleet_pro)) AS md_has_fleet_pro
+FROM cte_domains c1
+         LEFT JOIN cte_domains c2
+                   ON c1.map_principal_domain = c2.domain_name
+                       AND c1.date_key = c2.date_key
+         LEFT JOIN dwh_main.dim_main_domain_stat_scd2 mds
+                   ON c1.map_principal_main_domain = mds.main_domain_foxbox
+                       AND c1.date_key >= mds.valid_from_ts::DATE
+                       AND c1.date_key < mds.valid_to_ts::DATE
+GROUP BY c1.map_principal_main_domain, c1.date_key, mds.match_to_contract
+ORDER BY c1.map_principal_main_domain, c1.date_key
 ;
+
+SELECT count(*) FROM dwh_main.dim_combined_customer WHERE customer_is_fleet AND customer_status = 'active'

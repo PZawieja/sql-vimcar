@@ -31,6 +31,7 @@ WITH customers_with_revenue AS (
                         , MAX(reporting_month) AS last_mth_with_value
                    FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
                    WHERE mrr_eur > 0
+                     AND flag_future = FALSE
                    GROUP BY customer_id) r2
                   ON r.customer_id = r2.customer_id
                       AND r.reporting_month = r2.last_mth_with_value
@@ -97,6 +98,7 @@ CASE WHEN customer_cancelled_dt IS NULL THEN FALSE ELSE TRUE END AS churn_flag
 , coalesce(customer_cancelled_dt, current_date) - first_subscription_start_dt AS tenure_days
 , *
 FROM customers_all
-WHERE first_subscription_start_dt <= current_date
+WHERE date_trunc('month', first_subscription_start_dt) <> coalesce(date_trunc('month', customer_cancelled_dt), '2100-01-01') -- exclude customers who started and cancelled within the same calendar month
+--AND first_subscription_start_dt <= current_date
 ;
 
