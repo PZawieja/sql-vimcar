@@ -48,6 +48,29 @@ WITH cte_domains_in_scope AS (
                                        JOIN cte_domains_in_scope d ON p.domain_name = d.domain_name
                               WHERE s.v_id_user_session_last_access_ts >= CURRENT_DATE -  ${nbr_days}
                               GROUP BY p.domain_name)
+;
+
+---------------------------------------------------------------------------
+WITH cte_domains_in_scope AS (
+    SELECT domain_name
+         , greatest(dd.has_logbook_b2c, dd.has_fleet_logbook, dd.has_logbook_light)         AS domain_has_logbook
+         , greatest(dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light)    AS domain_has_admin
+         , greatest(dd.has_fleet_geo, dd.has_fleet_geo_light)                               AS domain_has_geo
+         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light)          AS domain_has_pro
+         , dd.has_logbook_b2c                                                               AS domain_has_logbook_b2c
+         , dd.has_fleet_logbook                                                             AS domain_has_fleet_logbook
+         , dd.has_fleet_share                                                               AS domain_has_fleet_share
+         , dd.has_damage_management                                                         AS domain_has_damage_management
+         , dd.has_driver_behaviour                                                          AS domain_has_driver_behaviour
+         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light
+        , dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light
+        , dd.has_fleet_geo, dd.has_fleet_geo_light, dd.has_fleet_logbook
+        , dd.has_damage_management, dd.has_driver_behaviour, dd.has_fleet_share)        AS domain_has_fleet_product
+    FROM dwh_main.dim_v_dom_domain dd
+    WHERE dd.domain_is_test = false
+    AND dd.domain_name = 'com.vimcar.de.k30846175'
+--       AND dd.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
+)
    , cte_calc AS (
     SELECT d.domain_name
          , COALESCE(mcpd.map_fb_domain_name,d.domain_name) AS map_principal_domain
@@ -56,7 +79,8 @@ WITH cte_domains_in_scope AS (
          , d.valid_to_ts::DATE AS valid_to_ts
          , dt.date_key
          , CASE WHEN c.customer_status IS NOT NULL THEN TRUE ELSE FALSE END AS match_to_subscription
-         , coalesce(c.customer_status, 'unknown') AS customer_status
+         , coalesce(CASE WHEN c.customer_status = 'cancelled' THEN 'cancelled' ELSE 'active' END, 'unknown') AS customer_status
+         , d.domain_is_active
          , c.customer_is_fleet
          , c.min_subscription_start_dt
          , first_usage_date_key
@@ -83,25 +107,16 @@ WITH cte_domains_in_scope AS (
          , domain_uses_events_route_documentation_usage_ft
          , domain_uses_events_vehicle_localisation_usage_ft
          , domain_uses_task_ft
-         , domain_has_logbook
-         , domain_has_admin
-         , domain_has_geo
-         , domain_has_pro
-         , domain_has_logbook_b2c
-         , domain_has_fleet_logbook
-         , domain_has_fleet_share
-         , domain_has_damage_management
-         , domain_has_driver_behaviour
-         , domain_has_fleet_product
-         , CASE
-               WHEN greatest(a1.last_activity_dt_cet, a2.last_activity_dt_cet, a3.last_activity_dt_cet, a4.last_activity_dt_cet) >= current_date - 14
-                   THEN TRUE
-               ELSE FALSE
-        END AS domain_activity_flag
---          , a1.last_activity_dt_cet AS fleet_event_last_activity_dt_cet
---          , a2.last_activity_dt_cet AS trip_logbook_last_activity_dt_cet
---          , a3.last_activity_dt_cet AS trip_geo_last_activity_dt_cet
---          , a4.last_activity_dt_cet AS session_last_activity_dt_cet
+         , dd.domain_has_logbook
+         , dd.domain_has_admin
+         , dd.domain_has_geo
+         , dd.domain_has_pro
+         , dd.domain_has_logbook_b2c
+         , dd.domain_has_fleet_logbook
+         , dd.domain_has_fleet_share
+         , dd.domain_has_damage_management
+         , dd.domain_has_driver_behaviour
+         , dd.domain_has_fleet_product
     FROM dwh_main.dim_domain_scd2 d
              JOIN cte_domains_in_scope dd
                   ON dd.domain_name = d.domain_name
@@ -113,14 +128,6 @@ WITH cte_domains_in_scope AS (
                            AND record_nbr_per_customer_id = 1
              LEFT JOIN dwh_main.dim_combined_customer c
                        ON c.customer_id = mcpd.map_unified_customer_id -- (CB or Shop customer ID, depending on if already migrated or not)
-             LEFT JOIN cte_activity_fleet_event a1
-                       ON a1.domain_name = dd.domain_name
-             LEFT JOIN cte_activity_trip_logbook a2
-                       ON a2.domain_name = dd.domain_name
-             LEFT JOIN cte_activity_trip_geo a3
-                       ON a3.domain_name = dd.domain_name
-             LEFT JOIN cte_activity_session a4
-                       ON a4.domain_name = dd.domain_name
     WHERE dt.date_key BETWEEN '2021-12-01' AND current_date - 1
       AND COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) != 'com.vimcar'
 -- sample problematic customer, domains mismatch: FOXBOX: 'com.vimcar.foodspring-gmbh' | SHOP: 'com.vimcar.de.k96844926'
@@ -130,6 +137,8 @@ WITH cte_domains_in_scope AS (
 SELECT
     c1.domain_name
      , c1.date_key AS reporting_date
+     , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.domain_has_fleet_product, c1.domain_has_fleet_product))) = TRUE THEN 'B2B' ELSE 'B2C' END AS domain_customer_type -- based on the config template
+     , true = ANY(ARRAY_AGG(greatest(c2.domain_is_active, c1.domain_is_active))) AS domain_is_active
 ------- Shop & Chargebee:
      , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.match_to_subscription, c1.match_to_subscription))) = TRUE THEN TRUE ELSE FALSE END    AS match_to_subscription
      , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.customer_is_fleet, c1.customer_is_fleet))) = TRUE THEN 'B2B' ELSE 'B2C' END           AS subscription_customer_type -- definition BI and Management
@@ -138,7 +147,6 @@ SELECT
      , MIN(least(c2.first_usage_date_key, c1.first_usage_date_key))                                                                     AS first_usage_dt
      , MIN(c1.valid_from_ts) AS valid_from_dt
      , MAX(c1.valid_to_ts) AS valid_to_dt
-     , true = ANY(ARRAY_AGG(greatest(c2.domain_activity_flag, c1.domain_activity_flag))) AS domain_is_active
      , MAX(coalesce(c2.domain_active_car_amt, c1.domain_active_car_amt))  AS domain_active_car_amt
      , true = ANY(ARRAY_AGG(greatest(c2.domain_uses_booking_ft, c1.domain_uses_booking_ft))) AS domain_uses_booking_ft
      , true = ANY(ARRAY_AGG(greatest(c2.domain_uses_contract_ft, c1.domain_uses_contract_ft))) AS domain_uses_contract_ft
@@ -175,7 +183,6 @@ FROM cte_calc c1
                    ON c1.map_principal_domain = c2.domain_name
                        AND c1.date_key = c2.date_key
 GROUP BY c1.domain_name, c1.date_key, c1.customer_status
-ORDER BY c1.domain_name, array_position(array['active','future','non_renewing','cancelled', 'unknown'], c1.customer_status::text), c1.customer_status NULLS LAST
 ;
 
 
