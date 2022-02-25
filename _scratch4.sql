@@ -3,53 +3,6 @@ SELECT * FROM dwh_main.dim_combined_invoice_line WHERE subscription_id = 'AzyXbW
 SELECT * FROM dwh_main.dim_combined_subscription WHERE subscription_id = 'AzyXbWSsKjQif3isa';
 ;
 
-
-WITH cte_domains_in_scope AS (
-    SELECT domain_name
-         , greatest(dd.has_logbook_b2c, dd.has_fleet_logbook, dd.has_logbook_light)         AS domain_has_logbook
-         , greatest(dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light)    AS domain_has_admin
-         , greatest(dd.has_fleet_geo, dd.has_fleet_geo_light)                               AS domain_has_geo
-         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light)          AS domain_has_pro
-         , dd.has_logbook_b2c                                                               AS domain_has_logbook_b2c
-         , dd.has_fleet_logbook                                                             AS domain_has_fleet_logbook
-         , dd.has_fleet_share                                                               AS domain_has_fleet_share
-         , dd.has_damage_management                                                         AS domain_has_damage_management
-         , dd.has_driver_behaviour                                                          AS domain_has_driver_behaviour
-         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light
-        , dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light
-        , dd.has_fleet_geo, dd.has_fleet_geo_light, dd.has_fleet_logbook
-        , dd.has_damage_management, dd.has_driver_behaviour, dd.has_fleet_share)        AS domain_has_fleet_product
-    FROM dwh_main.dim_v_dom_domain dd
-    WHERE dd.domain_is_test = false
-      AND dd.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
-)
-   , cte_activity_fleet_event AS (
-    SELECT p.domain_name, MAX(a.amp_event_ts AT TIME ZONE 'Europe/Berlin')::DATE AS last_activity_dt_cet
-    FROM dwh_main.dim_amp_event_fleet a
-             JOIN dwh_main.dim_principal p ON p.principal_uuid = a.principal_uuid::UUID
-             JOIN cte_domains_in_scope d ON p.domain_name = d.domain_name
-    WHERE a.amp_event_ts >= CURRENT_DATE - ${nbr_days}
-    GROUP BY p.domain_name)
-
-   , cte_activity_trip_logbook AS (SELECT t.domain_name, MAX(trip_start_date_cet) AS last_activity_dt_cet
-                                   FROM dwh_main.dim_trip t
-                                            JOIN cte_domains_in_scope d ON t.domain_name = d.domain_name
-                                   WHERE trip_start_date_cet >= CURRENT_DATE -  ${nbr_days}
-                                   GROUP BY t.domain_name)
-   , cte_activity_trip_geo AS (SELECT t.domain_name, MAX(gl_trip_start_date_cet) AS last_activity_dt_cet
-                               FROM dwh_main.dim_v_gl_trip t
-                                        JOIN cte_domains_in_scope d ON t.domain_name = d.domain_name
-                               WHERE gl_trip_start_date_cet >= CURRENT_DATE - ${nbr_days}
-                               GROUP BY t.domain_name)
-   , cte_activity_session AS (SELECT p.domain_name
-                                   , MAX(s.v_id_user_session_last_access_ts AT TIME ZONE 'Europe/Berlin')::DATE AS last_activity_dt_cet
-                              FROM dwh_main.dim_v_id_user_session s
-                                       JOIN dwh_main.dim_principal p ON s.v_id_user_id = p.principal_uuid
-                                       JOIN cte_domains_in_scope d ON p.domain_name = d.domain_name
-                              WHERE s.v_id_user_session_last_access_ts >= CURRENT_DATE -  ${nbr_days}
-                              GROUP BY p.domain_name)
-;
-
 ---------------------------------------------------------------------------
 WITH cte_domains_in_scope AS (
     SELECT domain_name
@@ -68,7 +21,7 @@ WITH cte_domains_in_scope AS (
         , dd.has_damage_management, dd.has_driver_behaviour, dd.has_fleet_share)        AS domain_has_fleet_product
     FROM dwh_main.dim_v_dom_domain dd
     WHERE dd.domain_is_test = false
-    AND dd.domain_name = 'com.vimcar.de.k30846175'
+    AND dd.domain_name = 'com.vimcar.absult-de'
 --       AND dd.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
 )
    , cte_calc AS (
@@ -128,22 +81,25 @@ WITH cte_domains_in_scope AS (
                            AND record_nbr_per_customer_id = 1
              LEFT JOIN dwh_main.dim_combined_customer c
                        ON c.customer_id = mcpd.map_unified_customer_id -- (CB or Shop customer ID, depending on if already migrated or not)
-    WHERE dt.date_key BETWEEN '2021-12-01' AND current_date - 1
+    WHERE dt.date_key BETWEEN '2022-02-20' AND current_date -- 1
       AND COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) != 'com.vimcar'
 -- sample problematic customer, domains mismatch: FOXBOX: 'com.vimcar.foodspring-gmbh' | SHOP: 'com.vimcar.de.k96844926'
 --         AND d.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
 --       AND d.domain_name = 'com.vimcar.gb.a19b21c13db0492e81ed392f85d6510c'
 )
 SELECT
-    c1.domain_name
-     , c1.date_key AS reporting_date
+     c1.date_key AS reporting_date
+     , c1.domain_name
      , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.domain_has_fleet_product, c1.domain_has_fleet_product))) = TRUE THEN 'B2B' ELSE 'B2C' END AS domain_customer_type -- based on the config template
-     , true = ANY(ARRAY_AGG(greatest(c2.domain_is_active, c1.domain_is_active))) AS domain_is_active
+     , true = ANY(ARRAY_AGG(greatest(c2.domain_is_active, c1.domain_is_active, FALSE))) AS domain_is_active
 ------- Shop & Chargebee:
      , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.match_to_subscription, c1.match_to_subscription))) = TRUE THEN TRUE ELSE FALSE END    AS match_to_subscription
-     , CASE WHEN true = ANY(ARRAY_AGG(greatest(c2.customer_is_fleet, c1.customer_is_fleet))) = TRUE THEN 'B2B' ELSE 'B2C' END           AS subscription_customer_type -- definition BI and Management
+     , CASE
+         WHEN true = ANY(ARRAY_AGG(greatest(c2.customer_is_fleet, c1.customer_is_fleet))) = TRUE THEN 'B2B'
+         WHEN true = ANY(ARRAY_AGG(greatest(c2.match_to_subscription, c1.match_to_subscription))) = TRUE THEN 'B2C'
+         ELSE 'N/A' END                                                                                                                 AS subscription_customer_type -- definition BI and Management
      , MIN(coalesce(c2.customer_status, c1.customer_status))                                                                            AS subscription_customer_status
-     , MIN(least(c2.min_subscription_start_dt, c1.min_subscription_start_dt))                                                           AS min_subscription_start_dt
+     , MIN(least(c2.min_subscription_start_dt, c1.min_subscription_start_dt))                                                           AS first_subscription_start_dt
      , MIN(least(c2.first_usage_date_key, c1.first_usage_date_key))                                                                     AS first_usage_dt
      , MIN(c1.valid_from_ts) AS valid_from_dt
      , MAX(c1.valid_to_ts) AS valid_to_dt
@@ -171,7 +127,9 @@ SELECT
      , true = ANY(ARRAY_AGG(greatest(c2.domain_uses_events_vehicle_localisation_usage_ft, c1.domain_uses_events_vehicle_localisation_usage_ft))) AS domain_uses_events_vehicle_localisation_usage_ft
      , true = ANY(ARRAY_AGG(greatest(c2.domain_uses_task_ft, c1.domain_uses_task_ft))) AS domain_uses_task_ft
      -- product fields:
-     , true = ANY(ARRAY_AGG(greatest(c2.domain_has_logbook, c1.domain_has_logbook))) AS domain_has_logbook
+--      , true = ANY(ARRAY_AGG(greatest(c2.domain_has_logbook, c1.domain_has_logbook))) AS domain_has_logbook
+     , true = ANY(ARRAY_AGG(greatest(c2.domain_has_logbook_b2c, c1.domain_has_logbook_b2c))) AS domain_has_logbook_b2c
+     , true = ANY(ARRAY_AGG(greatest(c2.domain_has_fleet_logbook, c1.domain_has_fleet_logbook))) AS domain_has_logbook_b2b
      , true = ANY(ARRAY_AGG(greatest(c2.domain_has_admin, c1.domain_has_admin))) AS domain_has_admin
      , true = ANY(ARRAY_AGG(greatest(c2.domain_has_geo, c1.domain_has_geo))) AS domain_has_geo
      , true = ANY(ARRAY_AGG(greatest(c2.domain_has_pro, c1.domain_has_pro))) AS domain_has_pro
