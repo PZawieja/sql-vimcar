@@ -11,7 +11,8 @@ WITH customers_with_revenue AS (
              WHEN c.customer_status IN ('cancelled', 'non_renewing')
                  THEN c.max_subscription_cancelled_dt
             END AS customer_cancelled_dt
---          , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
+         , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
+         , coalesce(c.max_subscription_cancelled_dt, current_date) - 120 AS cutoff_start_dt
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%36 %' THEN TRUE END))          AS subscription_length_36_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%12 %' THEN TRUE END))          AS subscription_length_12_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_length_and_payment LIKE '%1 %' THEN TRUE END))           AS subscription_length_1_mths
@@ -56,6 +57,8 @@ WITH customers_with_revenue AS (
                WHEN c.customer_status IN ('cancelled', 'non_renewing')
                    THEN c.max_subscription_cancelled_dt
             END AS customer_cancelled_dt
+         , coalesce(c.max_subscription_cancelled_dt, current_date) AS reference_dt
+         , coalesce(c.max_subscription_cancelled_dt, current_date) - 120 AS cutoff_start_dt
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%36 %' THEN TRUE END))          AS subscription_length_36_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%12 %' THEN TRUE END))          AS subscription_length_12_mths
          , true = ANY(ARRAY_AGG(CASE WHEN r.product_terms LIKE '%1 %' THEN TRUE END))           AS subscription_length_1_mths

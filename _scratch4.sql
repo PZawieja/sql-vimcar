@@ -4,27 +4,7 @@ SELECT * FROM dwh_main.dim_combined_subscription WHERE subscription_id = 'AzyXbW
 ;
 
 ---------------------------------------------------------------------------
-WITH cte_domains_in_scope AS (
-    SELECT domain_name
-         , greatest(dd.has_logbook_b2c, dd.has_fleet_logbook, dd.has_logbook_light)         AS domain_has_logbook
-         , greatest(dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light)    AS domain_has_admin
-         , greatest(dd.has_fleet_geo, dd.has_fleet_geo_light)                               AS domain_has_geo
-         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light)          AS domain_has_pro
-         , dd.has_logbook_b2c                                                               AS domain_has_logbook_b2c
-         , dd.has_fleet_logbook                                                             AS domain_has_fleet_logbook
-         , dd.has_fleet_share                                                               AS domain_has_fleet_share
-         , dd.has_damage_management                                                         AS domain_has_damage_management
-         , dd.has_driver_behaviour                                                          AS domain_has_driver_behaviour
-         , greatest(dd.has_fleet_pro, dd.has_fleet_pro_uk, dd.has_fleet_pro_light
-        , dd.has_fleet_admin, dd.has_fleet_admin_uk, dd.has_fleet_admin_light
-        , dd.has_fleet_geo, dd.has_fleet_geo_light, dd.has_fleet_logbook
-        , dd.has_damage_management, dd.has_driver_behaviour, dd.has_fleet_share)        AS domain_has_fleet_product
-    FROM dwh_main.dim_v_dom_domain dd
-    WHERE dd.domain_is_test = false
-    AND dd.domain_name = 'com.vimcar.absult-de'
---       AND dd.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
-)
-   , cte_calc AS (
+WITH cte_calc AS (
     SELECT d.domain_name
          , COALESCE(mcpd.map_fb_domain_name,d.domain_name) AS map_principal_domain
          , COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) AS map_principal_main_domain
@@ -32,7 +12,13 @@ WITH cte_domains_in_scope AS (
          , d.valid_to_ts::DATE AS valid_to_ts
          , dt.date_key
          , CASE WHEN c.customer_status IS NOT NULL THEN TRUE ELSE FALSE END AS match_to_subscription
-         , coalesce(CASE WHEN c.customer_status = 'cancelled' THEN 'cancelled' ELSE 'active' END, 'unknown') AS customer_status
+         , CASE
+             WHEN c.customer_status IS NULL
+                THEN 'unknown'
+             WHEN c.customer_status = 'cancelled'
+                THEN 'cancelled'
+             ELSE 'active'
+             END AS customer_status
          , d.domain_is_active
          , c.customer_is_fleet
          , c.min_subscription_start_dt
@@ -60,18 +46,17 @@ WITH cte_domains_in_scope AS (
          , domain_uses_events_route_documentation_usage_ft
          , domain_uses_events_vehicle_localisation_usage_ft
          , domain_uses_task_ft
-         , dd.domain_has_logbook
-         , dd.domain_has_admin
-         , dd.domain_has_geo
-         , dd.domain_has_pro
-         , dd.domain_has_logbook_b2c
-         , dd.domain_has_fleet_logbook
-         , dd.domain_has_fleet_share
-         , dd.domain_has_damage_management
-         , dd.domain_has_driver_behaviour
-         , dd.domain_has_fleet_product
+         , CASE WHEN d.domain_configuration_template_match LIKE '%B2C Logbook%' THEN TRUE END domain_has_logbook_b2c
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet Logbook%' THEN TRUE END domain_has_fleet_logbook
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet Admin%' THEN TRUE END domain_has_admin
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet Geo%' THEN TRUE END domain_has_geo
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet Pro%' THEN TRUE END domain_has_pro
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet Share%' THEN TRUE END domain_has_fleet_share
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Damage Management%' THEN TRUE END domain_has_damage_management
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Driver Behaviour%' THEN TRUE END domain_has_driver_behaviour
+         , CASE WHEN d.domain_configuration_template_match LIKE '%Fleet%' THEN TRUE END domain_has_fleet_product
     FROM dwh_main.dim_domain_scd2 d
-             JOIN cte_domains_in_scope dd
+             JOIN dwh_main.dim_v_dom_domain dd
                   ON dd.domain_name = d.domain_name
              JOIN dwh_main.dim_date dt
                   ON dt.date_key >= d.valid_from_ts::DATE
@@ -81,12 +66,15 @@ WITH cte_domains_in_scope AS (
                            AND record_nbr_per_customer_id = 1
              LEFT JOIN dwh_main.dim_combined_customer c
                        ON c.customer_id = mcpd.map_unified_customer_id -- (CB or Shop customer ID, depending on if already migrated or not)
-    WHERE dt.date_key BETWEEN '2022-02-20' AND current_date -- 1
-      AND COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) != 'com.vimcar'
+    WHERE dt.date_key BETWEEN current_date - 5 AND current_date - 1
+      --    WHERE dt.date_key BETWEEN '${DWH_FROM_TIMESTAMP}'::DATE - 5 AND current_date - 1
+       AND COALESCE(mcpd.map_fb_main_domain_name,d.main_domain_name) != 'com.vimcar'
+       AND dd.domain_is_test = false
 -- sample problematic customer, domains mismatch: FOXBOX: 'com.vimcar.foodspring-gmbh' | SHOP: 'com.vimcar.de.k96844926'
 --         AND d.domain_name IN ('com.vimcar.de.k96844926', 'com.vimcar.foodspring-gmbh')
---       AND d.domain_name = 'com.vimcar.gb.a19b21c13db0492e81ed392f85d6510c'
+      AND d.domain_name = 'com.vimcar.de.k22881884'
 )
+-- SELECT * FROM cte_calc;
 SELECT
      c1.date_key AS reporting_date
      , c1.domain_name

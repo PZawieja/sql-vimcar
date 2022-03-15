@@ -227,20 +227,20 @@ SELECT i.customer_id
      , c.max_subscription_cancelled_dt
      , i.product_group
      , CASE
-         -- only invoices started in the past or today, the ones ending today are EXCLUDED
+    -- only invoices started in the past or today, the ones ending today are EXCLUDED
            WHEN invoice_provisioning_start_dt <= CURRENT_DATE AND
                 invoice_provisioning_end_dt > CURRENT_DATE
                THEN mrr_eur - refund_mrr_eur
-        END AS mrr_eur_after_refund
+    END AS mrr_eur_after_refund
      , CASE
            WHEN invoice_provisioning_start_dt <= CURRENT_DATE AND
                 invoice_provisioning_end_dt > CURRENT_DATE
                THEN item_quantity
     END AS items
-FROM data_mart_internal_reporting.ir_sh_cb_invoice_line i
-         JOIN data_mart_internal_reporting.ir_sh_cb_subscription s
+FROM dwh_main.dim_combined_invoice_line i
+         JOIN dwh_main.dim_combined_subscription s
               ON i.subscription_id = s.subscription_id
-         JOIN data_mart_internal_reporting.ir_sh_cb_customer c
+         JOIN dwh_main.dim_combined_customer c
               ON c.customer_id = s.customer_id
 WHERE i.invoice_status <> 'voided'
 --   AND i.product_group <> 'Hardware'
@@ -466,3 +466,70 @@ CASE WHEN c.customer_id_shop IS NOT NULL THEN 'SH' ELSE 'CB' END AS customer_ori
 CASE WHEN array_agg(i.product_group) @> '{"Geo"}' THEN TRUE ELSE FALSE END AS has_geo ;
 -- calculate time difference in seconds:
 extract(EPOCH FROM event_end_ts::timestamp - event_start_ts::timestamp) ;
+
+----------------
+-- Foxbox domain MRR and status, match to subscription:
+WITH cte_users AS (
+    SELECT p.domain_name
+         , p.main_domain_name
+         , SUM(1) FILTER ( WHERE principal_deleted_ts IS NULL ) AS cnt_users
+    FROM dwh_main.dim_principal p
+             JOIN dwh_main.dim_v_dom_domain d
+                  ON d.domain_name = p.domain_name
+    WHERE d.domain_is_test = false
+    GROUP BY p.domain_name, p.main_domain_name
+)
+   , cte_cars AS (
+    SELECT c.domain_name
+         , SUM(1) FILTER ( WHERE c.car_end_logbook_ts IS NULL ) AS cnt_cars
+    FROM dwh_main.dim_car c
+             JOIN cte_users u
+                  ON c.domain_name = u.domain_name
+    GROUP BY c.domain_name
+)
+   , cte_domain_status AS (
+    SELECT domain_name
+         , domain_customer_type
+         , domain_is_active
+         , match_to_subscription
+         , subscription_customer_type
+         , subscription_customer_status
+    FROM data_mart_internal_reporting.ir_p_fb_domain_features_usage
+    WHERE reporting_date = (SELECT MAX(reporting_date) FROM data_mart_internal_reporting.ir_p_fb_domain_features_usage)
+)
+   , cte_domains AS (SELECT u.domain_name
+--                           , u.main_domain_name
+                          , STRING_AGG(m.map_unified_customer_id, '; ')                                AS subscription_customer_id
+                          , u.cnt_users
+                          , car.cnt_cars
+                          , SUM(c.customer_current_mrr_eur)                                           AS current_mrr_eur
+                          , CASE WHEN SUM(c.customer_current_mrr_eur) >= 200 THEN TRUE ELSE FALSE END AS "is_m+_customer"
+                     FROM cte_users u
+                              LEFT JOIN cte_cars car
+                                        ON car.domain_name = u.domain_name
+                              LEFT JOIN dwh_main.map_customer_to_foxbox_domain m
+                                        ON m.map_fb_domain_name = u.domain_name
+                                            AND record_nbr_per_unified_customer_id = 1
+                              LEFT JOIN dwh_main.dim_combined_customer c
+                                        ON c.customer_id = m.map_unified_customer_id
+                     GROUP BY u.domain_name, u.main_domain_name, car.cnt_cars, u.cnt_users
+)
+SELECT d.*
+     , s.domain_customer_type
+     , s.domain_is_active
+     , s.match_to_subscription
+     , s.subscription_customer_type
+     , s.subscription_customer_status
+     , p.principal_uuid
+     , p.email AS principal_email
+     , p.principal_first_name
+     , p.principal_last_name
+FROM cte_domains d
+         JOIN dwh_main.dim_principal p
+              ON d.domain_name = p.domain_name
+         LEFT JOIN cte_domain_status s
+                   ON d.domain_name = s.domain_name
+WHERE 1=1
+--      AND principal_deleted_ts IS NULL
+-- AND s.domain_name is null
+;
