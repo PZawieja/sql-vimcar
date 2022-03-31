@@ -329,14 +329,15 @@ WHERE invoice_id = '200000782';
 
 --- current paying customers:
 SELECT i.*
-     , i.item_quantity * (1-(i.refund_mrr_eur / nullif(i.mrr_eur,0))) AS item_quantity
 FROM dwh_main.dim_combined_invoice_line i
          JOIN dwh_main.dim_combined_subscription s
               ON s.subscription_id = i.subscription_id
          JOIN dwh_main.dim_combined_customer c
               ON c.customer_id = i.customer_id
-WHERE 1=1
-  AND i.invoice_status <> 'voided'
+         JOIN dwh_main.dim_combined_product p
+              ON i.entity_id = p.entity_id
+                  AND i.entity_type = p.entity_type
+WHERE i.invoice_status <> 'voided'
   AND i.invoice_provisioning_start_dt <= current_date
   AND i.invoice_provisioning_end_dt > current_date;
 

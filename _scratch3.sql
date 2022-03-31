@@ -2732,3 +2732,5 @@ WHERE 1=1
 ;
 
 SELECT * FROM "user" WHERE user_id = 'a7ad2010-7a25-44a0-8092-354615f157f0'
+;
+SELECT * FROM contract WHERE cancelation_reason LIKE '%ghost%'
