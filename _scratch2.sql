@@ -1,413 +1,242 @@
+K77940214;
 
-
-SELECT invoice_id ,invoice_provisioning_start_dt, invoice_provisioning_end_dt, product_terms
-FROM dwh_main.dim_combined_invoice_line
-WHERE invoice_provisioning_start_dt IN ('2020-01-29','2020-01-30', '2020-01-31')
-  AND product_terms LIKE '%monthly payment'
-  AND source_system = 'SH'
--- AND extract(month from age(invoice_provisioning_end_dt, invoice_provisioning_start_dt)) > 0;
-
-
-SELECT invoice_id ,invoice_provisioning_start_dt, invoice_provisioning_end_dt, product_terms
-FROM dwh_main.dim_combined_invoice_line
-WHERE invoice_provisioning_end_dt IN ('2020-03-29')
-  AND product_terms LIKE '%monthly payment'
-  AND source_system = 'SH'
---   AND extract(month from age(invoice_provisioning_end_dt, invoice_provisioning_start_dt)) > 0
-;
-
-WITH cte_fix_shop_invoice_dates_february_march_monthly_billing AS (
-        SELECT DISTINCT invoice_id
-        , CASE
-              WHEN extract(month from invoice_provisioning_start_dt) = 3 --March
-                  AND extract(day from invoice_provisioning_start_dt) = 1
-                  AND extract(month from invoice_provisioning_end_dt) = 3 --March
-                  AND extract(day from invoice_provisioning_end_dt) = 29
-                THEN (extract(year from invoice_provisioning_start_dt) || '-02-28')::DATE
-                ELSE invoice_provisioning_start_dt
-            END AS fix_invoice_provisioning_start_dt
-        , CASE
-            WHEN extract(month from invoice_provisioning_start_dt) = 1 --January
-                    AND extract(day from invoice_provisioning_start_dt) IN (29,30,31)
-                THEN (extract(year from invoice_provisioning_start_dt) || '-02-28')::DATE
-                ELSE invoice_provisioning_end_dt
-            END AS fix_invoice_provisioning_end_dt
-        FROM dwh_main.dim_combined_invoice_line
-        WHERE source_system = 'SH'
-            AND product_terms LIKE '%monthly payment'
-            AND extract(year from invoice_provisioning_start_dt)::INT % 4 <> 0 -- not a leap_year
-        --     AND invoice_id IN ('R93420040','R77159373')
-)
-, cte_precalculation AS (
+WITH customers AS (
     SELECT
-        i.customer_id
-         , c.customer_country
-         , c.customer_is_fleet
-         , c.customer_status
-         , c.min_subscription_start_dt AS first_customer_subs_start_dt
-         , CASE WHEN c.customer_status IN ('non_renewing','cancelled') THEN c.max_subscription_cancelled_dt END AS customer_cancelled_dt
-         , i.subscription_id
-         , s.subscription_status
-         , s.subscription_start_dt
-         , s.subscription_end_dt
-         , s.subscription_cancelled_dt
+        r.customer_id
+         , CASE WHEN c.customer_id_chargebee IS NOT NULL THEN 'CB' ELSE 'SH' END source_system
+         , c.customer_id_shop
+         , CASE WHEN r.customer_country = 'GB' THEN 'UK' ELSE 'DACH' END AS customer_country
+         , c.customer_contact_company_name
+         , MIN(r.invoice_provisioning_start_dt) OVER (PARTITION BY r.customer_id) AS first_order_date
+         , r.customer_status
+         , CASE WHEN r.customer_status IN ('cancelled','non_renewing') THEN max_subscription_cancelled_dt END AS cancellation_dt
+         , CASE WHEN p.product_group NOT IN ('Logbook B2C', 'Admin', 'Logbook B2B', 'Geo', 'Pro') THEN 'Other' ELSE p.product_group END AS product
          , CASE
-               WHEN date_trunc('month',s.subscription_cancelled_dt) <= date_trunc('month',s.subscription_start_dt)
-                   THEN TRUE
-               ELSE FALSE
-        END AS subscription_cancelled_in_first_month
-         , i.invoice_id
-         , i.invoice_created_dt
-         , coalesce(fix.fix_invoice_provisioning_start_dt, i.invoice_provisioning_start_dt) AS invoice_provisioning_start_dt
-         , coalesce(fix.fix_invoice_provisioning_end_dt, i.invoice_provisioning_end_dt) AS invoice_provisioning_end_dt
---          , i.cb_inv_total                                                                                     AS invoice_total_amount
---          , i.cb_inv_amount_adjusted                                                                           AS invoice_adjusted_amount
-         , i.entity_id AS plan_id
-         , i.product_name
-         , CASE
-               WHEN i.product_group IN ('Logbook B2B', 'Logbook B2C') THEN 'Logbook'
-               WHEN i.product_group IN ('Admin', 'Geo', 'Pro') THEN i.product_group
-               ELSE 'Other'
-        END                                                                                               AS product_group
-         , i.product_terms
-         , i.discount_percentage
-         , i.full_refund_flag AS full_refund
-         , i.currency_code
-         , i.exchange_rate
-         , i.mrr_local_ccy
-         , i.refund_mrr_local_ccy
-         , i.item_quantity
-         , i.refund_item_quantity
---         , CASE WHEN i.source_system = 'SH' THEN i.item_quantity * (i.refund_mrr_eur / nullif(i.mrr_eur,0)::numeric) ELSE 0 END AS refund_item_quantity   -- the quantity reduction is possible only in Shop. In CB in case of quantity reduction the subscription is cancelled and new one with new item quantity is created
-    FROM dwh_main.dim_combined_invoice_line i
-             JOIN dwh_main.dim_combined_subscription s
-                  ON s.customer_id = i.customer_id
-                      AND s.subscription_id = i.subscription_id
+               WHEN p.product_group NOT IN ('Logbook B2C', 'Admin', 'Logbook B2B', 'Geo', 'Pro')
+                   THEN 'Other'
+               WHEN p.product_group LIKE 'Logbook%'
+                   THEN 'Logbook'
+               ELSE p.product_group
+        END AS product_journey
+         , CASE WHEN p.product_group IN ('Admin', 'Logbook B2B', 'Geo', 'Pro') THEN TRUE ELSE FALSE END AS is_b2b_product
+         , CASE WHEN reporting_month = MIN(reporting_month) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_first_mth
+         , CASE WHEN reporting_month = date_trunc('month', current_date)::DATE THEN TRUE END AS flag_current_mth
+         , CASE WHEN reporting_month = MAX(reporting_month) FILTER ( WHERE mrr_eur >0) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_last_mth_with_value
+         , cm.churn_mth
+         , mrr_eur
+         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) > 0 THEN TRUE END AS flag_expansion
+         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) < 0 THEN TRUE END AS flag_contraction
+         , mrr_eur_expansion + mrr_eur_contraction AS mrr_fluctuation
+         , licenses
+         , MIN(r.reporting_month) FILTER ( WHERE flg_expansion_crossselling = true ) OVER (PARTITION BY r.customer_id) AS first_flg_expansion_crossselling
+    FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
              JOIN dwh_main.dim_combined_customer c
-                  ON c.customer_id = i.customer_id
-             LEFT JOIN cte_fix_shop_invoice_dates_february_march_monthly_billing fix
-                    ON fix.invoice_id = i.invoice_id
-    WHERE i.invoice_status <> 'voided'
-      AND i.product_group NOT IN ('Other', 'Hardware', 'Trial')
-      AND i.entity_id NOT IN ('1db52694-baee-45fb-902f-8de7293621fe', '974e92e4-fed9-499e-8b7e-582c986f8a6b','logbook_b2c-one_time_buy-eur','logbook_b2c-from_rent2buy-eur') -- exclude 1 time products, non recurring ones
-
---       AND cb_inv_line_item_id IS NOT NULL
---     AND cb_inv_customer_id = '30000866540' -- multiple invoices + one CN
---     AND cb_inv_customer_id = '30000673905'  -- find the credit note 80
---     AND cb_plan_id LIKE '%year%'
---    AND i.cb_inv_id = 'I-2021-01-215460'
--- AND cb_inv_customer_id = '30004929559' -- UK quarterly, good for checking as it "paused" in May for a month due to goodwill of Ops
---       AND c.customer_id = '30005149714' -- UK quarterly, good for checking as it starts on 1st of month
---   AND i.customer_id = 'K36527423' --AND i.invoice_id IN ('R93420040','R77159373')  -- provisioning dates fix
---     and i.subscription_id = '300020404756980' -- good for refund testing as was both full (25 licenses) and partial (3) refund
-
+                  ON c.customer_id = r.customer_id
+             JOIN dwh_main.dim_combined_product p
+                  ON p.entity_id = r.plan_id
+             LEFT JOIN (SELECT customer_id AS churn_customer_id
+                             , MAX(reporting_month) AS churn_mth
+                        FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
+                        WHERE churn_mth = true
+                        GROUP BY customer_id) cm
+                       ON cm.churn_customer_id = r.customer_id
+    WHERE is_fleet_customer = TRUE
+      AND flag_future = false
+--      AND subscription_id = 'V13028084'
+--      AND c.customer_id = 'K36527423' -- 506.35 expansion is correct
+--       and c.customer_id = '18941291'  -- 374.35 is correct
+--        AND r.customer_id = '30003253017'
 )
-   , cte_1 AS (SELECT customer_id
-                    , customer_country
-                    , customer_status
-                    , customer_is_fleet
-                    , first_customer_subs_start_dt
-                    , customer_cancelled_dt
-                    , subscription_id
-                    , subscription_status
-                    , subscription_start_dt
-                    , subscription_end_dt
-                    , subscription_cancelled_dt
-                    , subscription_cancelled_in_first_month
-                    , invoice_id
-                    , invoice_created_dt
-                    , invoice_provisioning_start_dt
-                    , CASE
-                          WHEN customer_status <> 'active'
-                              AND invoice_provisioning_end_dt = MAX(invoice_provisioning_end_dt) OVER (PARTITION BY customer_id)
-                              AND subscription_cancelled_in_first_month = FALSE
-                              AND ( date_trunc('month', invoice_provisioning_start_dt) = date_trunc('month', invoice_provisioning_end_dt) -- provisioning starts and ends in the same month (monthly billing)
---                         OR date_trunc('month',invoice_provisioning_start_dt) + interval '1 year' > date_trunc('month',invoice_provisioning_end_dt) -- provisioning ends within 12 mmths (yearly billing)
-                                   )
-                              THEN date_trunc('month', invoice_provisioning_end_dt) + INTERVAL '1 month'
-                          ELSE invoice_provisioning_end_dt
-        END::DATE invoice_provisioning_end_dt
-                    , invoice_provisioning_end_dt AS original_invoice_provisioning_end_dt
-                    , plan_id
-                    , product_name
-                    , product_group
-                    , product_terms
-                    , full_refund
-                    , discount_percentage
-                    , currency_code
-                    , exchange_rate
-                    , mrr_local_ccy
-                    , refund_mrr_local_ccy
-                    , item_quantity
-                    , refund_item_quantity
-                    , date_trunc('month',current_date)::DATE AS current_mth
-               FROM cte_precalculation p
+   , customers_2 AS (
+    SELECT
+        c.customer_id
+         , source_system
+         , c.customer_country
+         , customer_contact_company_name
+         , first_order_date
+         , date_trunc('month',first_order_date)::DATE AS first_order_mth
+         , first_flg_expansion_crossselling
+--          , age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)
+         , extract(year from age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)) * 12
+        + extract(month from age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)) AS first_corssselling_after_n_months
+         , c.customer_status
+         , cancellation_dt
+         , churn_mth
+         , segment_mrr_initial
+         , segment_mrr_current
+         , segment_mrr_most_recent
+         , string_agg(DISTINCT CASE WHEN flag_first_mth = TRUE THEN product END, ','
+                      order by CASE WHEN flag_first_mth = TRUE THEN product END) AS products_initial
+         , string_agg(DISTINCT CASE WHEN flag_last_mth_with_value = TRUE THEN product END, ','
+                      order by CASE WHEN flag_last_mth_with_value = TRUE THEN product END) AS products_most_recently
+
+         , string_agg(DISTINCT CASE WHEN flag_first_mth = TRUE THEN product_journey END, ','
+                      order by CASE WHEN flag_first_mth = TRUE THEN product_journey END) AS products_journey_initial
+         , string_agg(DISTINCT CASE WHEN flag_last_mth_with_value = TRUE THEN product_journey END, ','
+                      order by CASE WHEN flag_last_mth_with_value = TRUE THEN product_journey END) AS products_journey_most_recently
+--      , product
+-- MRR overall:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ),0)  AS mrr_eur_initial
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ),0) AS mrr_eur_current
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS mrr_eur_most_recent_value
+         , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ),0) AS lifetime_mrr_eur_expansion
+         , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_contraction = TRUE ),0) AS lifetime_mrr_eur_contraction
+-- Licenses overall:
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE ),0) AS licenses_initial
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE ),0) AS licenses_current
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS licenses_most_recent_value
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_initial_b2b
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_current_b2b
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND is_b2b_product = TRUE),0) AS licenses_most_recent_value_b2b
+         , coalesce(fs.fs_vehicles_overall, 0) AS fs_vehicles_overall
+         , coalesce(cfg.domain_configuration_product, 'unknown') AS foxbox_configuration_product
+------ Admin:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin'),0)  AS mrr_eur_initial_admin
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS mrr_eur_current_admin
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS mrr_eur_most_recent_value_admin
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin' ),0) AS licenses_initial_admin
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS licenses_current_admin
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS licenses_most_recent_value_admin
+------ Logbook:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product LIKE 'Logbook%'),0)  AS mrr_eur_initial_logbook
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product LIKE 'Logbook%'),0) AS mrr_eur_current_logbook
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product LIKE 'Logbook%'),0) AS mrr_eur_most_recent_value_logbook
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product LIKE 'Logbook%' ),0) AS licenses_initial_logbook
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product LIKE 'Logbook%'),0) AS licenses_current_logbook
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product LIKE 'Logbook%'),0) AS licenses_most_recent_value_logbook
+------ Geo:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Geo'),0)  AS mrr_eur_initial_geo
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Geo'),0) AS mrr_eur_current_geo
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Geo'),0) AS mrr_eur_most_recent_value_geo
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Geo' ),0) AS licenses_initial_geo
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Geo'),0) AS licenses_current_geo
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Geo'),0) AS licenses_most_recent_value_geo
+------ Pro:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Pro'),0)  AS mrr_eur_initial_pro
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Pro'),0) AS mrr_eur_current_pro
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Pro'),0) AS mrr_eur_most_recent_value_pro
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Pro' ),0) AS licenses_initial_pro
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Pro'),0) AS licenses_current_pro
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Pro'),0) AS licenses_most_recent_value_pro
+------ Other:
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Other'),0)  AS mrr_eur_initial_other
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Other'),0) AS mrr_eur_current_other
+         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Other'),0) AS mrr_eur_most_recent_value_other
+         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Other' ),0) AS licenses_initial_other
+         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Other'),0) AS licenses_current_other
+         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Other'),0) AS licenses_most_recent_value_other
+    FROM customers c
+             JOIN (SELECT customer_id
+                        , CASE
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 1000 THEN 'XL (1000+)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 500 THEN 'L (500-1000)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 200 THEN 'M (200-500)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 50 THEN 'S (50-200)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) >= 0 THEN 'XS (0-50)'
+                              ELSE 'Other'
+            END AS segment_mrr_initial
+                        , CASE
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 1000 THEN 'XL (1000+)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 500 THEN 'L (500-1000)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 200 THEN 'M (200-500)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 50 THEN 'S (50-200)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) >= 0 THEN 'XS (0-50)'
+                              ELSE 'Other (churned already)'
+            END AS segment_mrr_current
+                        , CASE
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 1000 THEN 'XL (1000+)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 500 THEN 'L (500-1000)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 200 THEN 'M (200-500)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 50 THEN 'S (50-200)'
+                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) >= 0 THEN 'XS (0-50)'
+                              ELSE 'Other'
+            END AS segment_mrr_most_recent
+                   FROM customers
+                   GROUP BY customer_id
+    ) t1
+                  ON t1.customer_id = c.customer_id
+             LEFT JOIN (SELECT fs_account_contact_id, SUM(fs_account_cf_vehicles_overall) AS fs_vehicles_overall
+                        FROM dwh_main.dim_fs_account
+                        WHERE fs_account_cf_vehicles_overall >0
+                        GROUP BY fs_account_contact_id) fs
+                       ON fs.fs_account_contact_id::varchar = c.customer_id
+             LEFT JOIN (SELECT
+                            m.map_unified_customer_id
+                             , string_agg(DISTINCT d.domain_configuration_template_match, ',') AS domain_configuration_product
+                        FROM dwh_main.map_customer_to_foxbox_domain m
+                                 JOIN dwh_main.dim_v_dom_domain d
+                                      ON d.domain_name = m.map_fb_domain_name
+                        WHERE record_nbr_per_unified_customer_id = 1
+                          AND map_fb_main_domain_name IS NOT NULL
+                        GROUP BY m.map_unified_customer_id) cfg
+                       ON cfg.map_unified_customer_id = c.customer_id
+
+    GROUP BY c.customer_id, source_system, cancellation_dt, customer_country, customer_contact_company_name, first_order_date, first_flg_expansion_crossselling, churn_mth, customer_status, churn_mth,
+             segment_mrr_initial, segment_mrr_current, segment_mrr_most_recent, fs.fs_vehicles_overall, cfg.domain_configuration_product--, product;
 )
-   , cte_2 AS (SELECT customer_id
-                    , customer_country
-                    , customer_is_fleet
-                    , subscription_id
-                    , subscription_status
-                    , customer_status
-                    , first_customer_subs_start_dt
-                    , MIN(COALESCE(subscription_start_dt, invoice_provisioning_start_dt)) OVER (PARTITION BY subscription_id)::DATE             AS subscription_start_dt
-                    , subscription_end_dt
-                    , subscription_cancelled_dt
-                    , subscription_cancelled_dt - MIN(COALESCE(subscription_start_dt, invoice_provisioning_start_dt)) OVER (PARTITION BY subscription_id)::DATE       AS cancelled_after_days
-                    , subscription_cancelled_in_first_month
-                    , customer_cancelled_dt
-                    , MIN(invoice_provisioning_start_dt)
-                      FILTER (WHERE full_refund = FALSE AND subscription_cancelled_in_first_month = FALSE) OVER (PARTITION BY customer_id)       AS first_invoice_dt
-                    , MIN(date_trunc('month', invoice_provisioning_start_dt))
-                      FILTER (WHERE full_refund = FALSE AND subscription_cancelled_in_first_month = FALSE) OVER (PARTITION BY customer_id)::DATE AS first_invoice_mth
+SELECT * FROM customers_2;
 
-                    , MIN(invoice_provisioning_start_dt) OVER (PARTITION BY customer_id)                                                          AS first_invoice_dt_all_invoices
-                    , MIN(date_trunc('month', invoice_provisioning_start_dt)) OVER (PARTITION BY customer_id)::DATE                               AS first_invoice_mth_all_invoices
 
-                    , coalesce(
-                    MAX(invoice_provisioning_end_dt) FILTER (WHERE full_refund = FALSE) OVER (PARTITION BY customer_id),
-                    MAX(invoice_provisioning_end_dt) OVER (PARTITION BY customer_id))                                                             AS valid_to_dt
 
-                    , coalesce(date_trunc('month', MAX(invoice_provisioning_end_dt)
-                                                   FILTER (WHERE full_refund = FALSE) OVER (PARTITION BY customer_id)),
-                               date_trunc('month',
-                                          MAX(invoice_provisioning_end_dt) OVER (PARTITION BY customer_id)))::DATE                                AS valid_to_mth
-                    , invoice_id
-                    , invoice_created_dt
-                    , invoice_provisioning_start_dt
-                    , date_trunc('month',invoice_provisioning_start_dt)::DATE                                                                     AS invoice_provisioning_start_mth
-                    , invoice_provisioning_end_dt
-                    , date_trunc('month',invoice_provisioning_end_dt)::DATE                                                                       AS invoice_provisioning_end_mth
-                    , CASE WHEN invoice_provisioning_end_dt != original_invoice_provisioning_end_dt THEN TRUE ELSE FALSE END                      AS flag_modified_invoice_provisioning_end_dt
-                    , full_refund
-                    , plan_id
-                    , product_name
-                    , product_group
-                    , product_terms
-                    , discount_percentage
-                    , currency_code
-                    , exchange_rate
-                    , mrr_local_ccy - refund_mrr_local_ccy AS mrr_temp_with_cn
-                    , mrr_local_ccy AS mrr_temp_without_cn
-                    , item_quantity
-                    , refund_item_quantity
-                    , current_mth
-               FROM cte_1
+WITH customers AS (SELECT customer_id
+                        , product_group
+                        , CASE
+                              WHEN SUM(mrr_eur_expansion + mrr_eur_contraction)
+                                   OVER (PARTITION BY customer_id, reporting_month, product_group ) > 0 THEN TRUE END AS flag_expansion
+                        , flg_expansion_crossselling
+                        , mrr_eur_expansion + mrr_eur_contraction AS mrr_fluctuation
+                        , licenses
+                        , EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) * 12 +
+                          EXTRACT(MONTH FROM AGE(reporting_month, first_invoice_mth)) + 1 AS                  tenure_mths
+                        , EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) + 1 AS                   tenure_years
+                        , CASE
+                              WHEN ((EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) * 12 +
+                                     EXTRACT(MONTH FROM AGE(reporting_month, first_invoice_mth))) /
+                                    NULLIF(EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)), 0)) = 12
+                                  THEN TRUE
+                              ELSE FALSE END AS                                                           flag_tenure_year_start
+                   FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
+                   WHERE is_fleet_customer = TRUE
+                     AND flag_future = FALSE
+                     AND customer_id = 'K77940214' -- 506.35 expansion is correct
+--       and customer_id = '18941291'  -- 374.35 is correct
+--    AND subscription_id = 'V13028084'
+--     AND customer_id = '11436777' -- multiple products
 )
-   , cte_3 AS (
-    SELECT c2.*
---                , dense_rank() OVER (PARTITION BY c2.customer_id, c2.invoice_id ORDER BY dd.reporting_month)
-         , dd.reporting_month
-         , CASE
-               WHEN flag_modified_invoice_provisioning_end_dt = TRUE
-                   AND invoice_provisioning_end_mth = reporting_month
-                   THEN 0
-               WHEN invoice_provisioning_end_dt > current_date
-                   AND reporting_month != current_mth
-                   AND dense_rank() OVER (PARTITION BY c2.customer_id, c2.invoice_id ORDER BY dd.reporting_month)
-                        > CASE
-                              WHEN split_part(product_terms, ' ', 3) = 'yearly' THEN 12
-                              WHEN split_part(product_terms, ' ', 3) = 'bi-yearly' THEN 6
-                              WHEN split_part(product_terms, ' ', 3) = 'quarterly' THEN 3
-                           END
-                   THEN 0
-
-               WHEN reporting_month != current_mth
-                   AND dense_rank() OVER (PARTITION BY c2.customer_id, c2.invoice_id ORDER BY dd.reporting_month)
-                        > CASE
-                              WHEN split_part(product_terms, ' ', 3) = 'bi-yearly' THEN 6
-                              WHEN split_part(product_terms, ' ', 3) = 'quarterly' THEN 3
-                           END
-                   THEN 0
-
-        -- new customers in the current month only:
-               WHEN first_invoice_dt >= current_date
-                   AND reporting_month = current_mth
-                   THEN mrr_temp_with_cn
-
-               WHEN ((invoice_provisioning_end_mth > reporting_month AND invoice_provisioning_start_dt < current_date)   -- provisioning start in the past and provisioning end greater that duration month
-                   OR (invoice_provisioning_end_dt >= current_date AND invoice_provisioning_start_dt < current_date)      -- provisioning start in the past and provisioning end greater or equal than today
-                   OR (invoice_provisioning_end_dt > reporting_month AND invoice_provisioning_start_dt > current_date AND reporting_month != current_mth)  -- provisioning start in future and provisioning end greater that duration month (BUT duration mth IS NOT current mth)
-                   OR (valid_to_mth = reporting_month AND invoice_provisioning_end_mth = reporting_month)
-                   OR (split_part(product_terms, ' ', 3) IN ('quarterly', 'bi-yearly') AND invoice_provisioning_start_dt = invoice_provisioning_start_mth)  -- special treatment for CB invoices starting on thee first day of month and end on last day of month +3/6 mths (see 30005149714, reporting month May'21 would have been 0 without this condition)
-                   ) THEN mrr_temp_with_cn
-
-        -- special treatment for mthly payments where order provisioning start and end is the same month and day (see V39655147, Nov 2018):
-               WHEN split_part(product_terms, ' ', 3) = 'monthly'
-                   AND
-                    MAX(
-                    (CASE WHEN split_part(product_terms, ' ', 3) = 'monthly'
-                        AND ((invoice_provisioning_end_mth > reporting_month AND invoice_provisioning_start_dt < current_date)
-                            OR (invoice_provisioning_end_dt >= current_date AND invoice_provisioning_start_dt < current_date)
-                            OR (invoice_provisioning_end_dt > reporting_month AND invoice_provisioning_start_dt > current_date AND reporting_month != current_mth)
-                                   ) THEN mrr_temp_with_cn ELSE 0 END)
-                        ) OVER (PARTITION BY customer_id, reporting_month) = 0
-                   AND invoice_provisioning_end_mth = reporting_month
-                   THEN mrr_temp_with_cn
-               ELSE 0
-        END AS mrr_with_cn
-
-         , CASE
-               WHEN flag_modified_invoice_provisioning_end_dt = TRUE
-                   AND invoice_provisioning_end_mth = reporting_month
-                   THEN 0
-
-               WHEN invoice_provisioning_end_dt > current_date
-                   AND reporting_month != current_mth
-                   AND dense_rank() OVER (PARTITION BY customer_id, invoice_id ORDER BY dd.reporting_month)
-                        > CASE
-                              WHEN split_part(product_terms, ' ', 3) = 'yearly' THEN 12
-                              WHEN split_part(product_terms, ' ', 3) = 'bi-yearly' THEN 6
-                              WHEN split_part(product_terms, ' ', 3) = 'quarterly' THEN 3
-                           END
-                   THEN 0
-
-               WHEN reporting_month != current_mth
-                   AND dense_rank() OVER (PARTITION BY customer_id, invoice_id ORDER BY dd.reporting_month)
-                        > CASE
-                              WHEN split_part(product_terms, ' ', 3) = 'yearly' THEN 12
-                              WHEN split_part(product_terms, ' ', 3) = 'bi-yearly' THEN 6
-                              WHEN split_part(product_terms, ' ', 3) = 'quarterly' THEN 3
-                           END
-                   THEN 0
-
-        -- new customers in the current month only:
-               WHEN first_invoice_dt_all_invoices >= current_date
-                   AND reporting_month = current_mth
-                   THEN mrr_temp_without_cn
-
-               WHEN ((invoice_provisioning_end_mth > reporting_month AND invoice_provisioning_start_dt < current_date)   -- provisioning start in the past and provisioning end greater that duration month
-                   OR (invoice_provisioning_end_dt >= current_date AND invoice_provisioning_start_dt < current_date)      -- provisioning start in the past and provisioning end greater or equal than today
-                   OR (invoice_provisioning_end_dt > reporting_month AND invoice_provisioning_start_dt > current_date AND reporting_month != current_mth)  -- provisioning start in future and provisioning end greater that duration month (BUT duration mth IS NOT current mth)
-                   OR (valid_to_mth = reporting_month AND invoice_provisioning_end_mth = reporting_month)
-                   OR (split_part(product_terms, ' ', 3) IN ('quarterly', 'bi-yearly') AND invoice_provisioning_start_dt = invoice_provisioning_start_mth)  -- special treatment for CB invoices starting on thee first day of month and end on last day of month +3/6 mths (see 30005149714, reporting month May'21 would have been 0 without this condition)
-                   ) THEN mrr_temp_without_cn
-
-               WHEN split_part(product_terms, ' ', 3) = 'monthly'
-                   AND
-                    MAX(
-                    (CASE WHEN split_part(product_terms, ' ', 3) = 'monthly'
-                        AND ((invoice_provisioning_end_mth > reporting_month AND invoice_provisioning_start_dt < current_date)
-                            OR (invoice_provisioning_end_dt >= current_date AND invoice_provisioning_start_dt < current_date)
-                            OR (invoice_provisioning_end_dt > reporting_month AND invoice_provisioning_start_dt > current_date AND reporting_month != current_mth)
-                                   ) THEN mrr_temp_without_cn ELSE 0 END)
-                        ) OVER (PARTITION BY customer_id, reporting_month) = 0
-                   AND invoice_provisioning_end_mth = reporting_month
-                   THEN mrr_temp_without_cn
-               ELSE 0
-        END AS mrr_without_cn
-    FROM cte_2 c2
-             LEFT JOIN (SELECT DISTINCT date_trunc('month',date_key)::DATE AS reporting_month
-                        FROM dwh_main.dim_date
-                        WHERE date_key > '2013-01-01' AND date_key <= current_date + interval '5 years') dd
-                       ON dd.reporting_month >= invoice_provisioning_start_mth
-                           AND dd.reporting_month <= invoice_provisioning_end_mth
-                           AND dd.reporting_month <= valid_to_mth
-    WHERE dd.reporting_month IS NOT NULL
+   , cte_tenure AS (
+    SELECT c1.customer_id
+--      , c1.product_group
+         , c1.tenure_mths
+         , COALESCE(SUM(c1.mrr_fluctuation) FILTER ( WHERE c1.flag_expansion = TRUE ), 0) AS tenure_mths_mrr_eur_expansion
+         , c1.tenure_years
+         , SUM(c2.tenure_years_mrr_eur_expansion) AS tenure_years_mrr_eur_expansion
+    FROM customers c1
+             JOIN (SELECT customer_id
+                        , tenure_years
+                        , product_group
+                        , COALESCE(SUM(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ), 0) AS tenure_years_mrr_eur_expansion
+                   FROM customers
+                   GROUP BY customer_id, product_group, tenure_years) c2
+                  ON c2.customer_id = c1.customer_id
+                      AND c2.product_group = c1.product_group
+                      AND c2.tenure_years = c1.tenure_years
+    GROUP BY c1.customer_id, c1.tenure_mths, c1.tenure_years, c1.flag_expansion
 )
+-- SELECT * FROM cte_tenure;
 SELECT customer_id
-     , customer_country
-     , customer_is_fleet AS is_fleet_customer
-     , subscription_id
-     , subscription_status
-     , customer_status
-     , first_customer_subs_start_dt
-     , subscription_start_dt
-     , subscription_end_dt  -- next renewal date
-     , subscription_cancelled_dt
-     , cancelled_after_days
-     , subscription_cancelled_in_first_month
-     , customer_cancelled_dt
-     , first_invoice_dt
-     , first_invoice_mth
-     , first_invoice_dt_all_invoices
-     , first_invoice_mth_all_invoices
-     , valid_to_dt
-     , valid_to_mth
-     , invoice_id
-     , invoice_created_dt
-     , invoice_provisioning_start_dt
-     , invoice_provisioning_start_mth
-     , invoice_provisioning_end_dt
-     , invoice_provisioning_end_mth
---      , invoice_total_amount / 100::numeric                                                           AS invoice_total_amount
---      , invoice_adjusted_amount / 100::numeric                                                        AS invoice_adjusted_amount
-     , discount_percentage AS invoice_discount_pct
-     , currency_code
-     , exchange_rate
---      , credit_note_pct
-     , full_refund                                                                                   AS invoice_has_full_refund
-     , FALSE AS is_renewal -- TO DO!!
-
---      , CASE WHEN DATE_TRUNC('month', subscription_end_dt) = reporting_month THEN TRUE ELSE FALSE END AS is_renewal
---      , CASE WHEN renewal_temp = TRUE AND order_has_full_refund = FALSE
---     AND (
---                          (product_length_and_payment LIKE '%annual payment%' AND MIN(reporting_month) OVER (PARTITION BY order_uuid) = reporting_month) -- for annual payments take the 1st duration month of each of each renewed order
---                          OR (product_length_and_payment = '1y, monthly payment' AND (extract(year from age(reporting_month, first_mthly_payment_order_mth)) * 12 + extract(month from age(reporting_month, first_mthly_payment_order_mth)))::INT % 12 = 0 )
---                          OR (product_length_and_payment = '3y, monthly payment' AND (extract(year from age(reporting_month, first_mthly_payment_order_mth)) * 12 + extract(month from age(reporting_month, first_mthly_payment_order_mth)))::INT % 36 = 0 )
---                      ) THEN TRUE ELSE FALSE END AS renewal
-     , plan_id
-     , product_name
-     , product_group
-     , product_terms
-     , CASE WHEN first_invoice_mth = reporting_month THEN TRUE ELSE FALSE END                        AS customer_is_new
-     , CASE
-           WHEN first_invoice_mth_all_invoices = reporting_month THEN TRUE
-           ELSE FALSE END                                                                            AS customer_is_new_credit_note_ignored
-     , CASE WHEN reporting_month > current_mth THEN TRUE ELSE FALSE END                              AS flag_future
-     , reporting_month
-     , CASE
-           WHEN customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth THEN TRUE
-           ELSE FALSE END                                                                            AS churn_mth
-     , CASE
-           WHEN (customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth) -- churn month
-               OR full_refund = TRUE
-               OR subscription_cancelled_in_first_month = TRUE
-               THEN 0
-           ELSE mrr_with_cn END                                                                      AS mrr_with_credit_note
-
-     , CASE
-           WHEN (customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth) -- churn month
-               THEN 0
-           ELSE mrr_without_cn END                                                                   AS mrr_without_credit_note
-
-     , CASE WHEN mth_last_mth_with_mrr IS NOT NULL THEN mrr_with_cn END                              AS the_most_recent_customer_mrr
-     , CASE
-           WHEN (customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth) -- churn month
-               THEN 0
-           ELSE mrr_without_cn - mrr_with_cn
-    END                                                                                           AS credit_note_mrr
-     , CASE
-           WHEN (customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth) -- churn month
-               OR full_refund = TRUE
-               OR subscription_cancelled_in_first_month = TRUE
-               OR mrr_with_cn = 0 THEN 0
-           ELSE item_quantity - refund_item_quantity END  AS licenses
-     , CASE
-           WHEN (customer_cancelled_dt IS NOT NULL AND reporting_month = valid_to_mth) -- churn month
-               OR mrr_without_cn = 0 THEN 0
-           ELSE item_quantity
-    END                                                                                          AS licenses_without_credit_note
---               , coalesce(CASE WHEN full_refund = TRUE OR (customer_terminated_dt IS NOT NULL AND reporting_month = valid_to_mth)
---                                   THEN 0
---                              WHEN full_refund = TRUE
---                    THEN round(item_quantity) FILTER ( WHERE mrr_with_cn >0 ) OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length)
---                                                         * (round(mrr_with_cn / nullif(sum(mrr_without_cn) OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length),0)::numeric,3)) ,2)
---                    ELSE round(SUM(item_quantity) FILTER ( WHERE mrr_with_cn >0 ) OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length)
---                                                         * (round(mrr_with_cn / nullif(sum(mrr_with_cn) OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length),0)::numeric,3)) ,2) END, 0) AS customer_licenses
---               , coalesce(round(SUM(item_quantity) FILTER ( WHERE mrr_without_cn >0 )OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length)
---                                    * (round(mrr_without_cn / nullif(sum(mrr_without_cn) OVER (PARTITION BY customer_id, reporting_month, product_group, payment_frequency, plan_length),0)::numeric,3)) ,2), 0) AS customer_licenses_without_credit_note
--- , credit_note_item_pct
--- , item_quantity * (1-credit_note_item_pct)
-FROM cte_3 c3
-         LEFT JOIN (SELECT customer_id AS customer_id_last_mth_with_mrr
-                         , coalesce(MAX(reporting_month) FILTER ( WHERE customer_status = 'active' AND mrr_with_cn >0)
-        , MAX(reporting_month) FILTER ( WHERE customer_status != 'active' AND mrr_with_cn >0)) AS mth_last_mth_with_mrr
-                    FROM cte_3
-                    WHERE reporting_month <= current_date
-                    GROUP BY customer_id) v
-                   ON v.customer_id_last_mth_with_mrr = c3.customer_id
-                       AND v.mth_last_mth_with_mrr = c3.reporting_month
--- WHERE customer_id = '6olerSQP3x4fwAV'
-
-;
+     , 0 AS tenure_mths
+     , SUM(mrr_eur_new) AS tenure_mths_mrr_eur_expansion
+     , 0 AS tenure_years
+     , SUM(mrr_eur_new) AS tenure_years_mrr_eur_expansion
+FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
+WHERE EXISTS (SELECT 1 FROM cte_tenure t WHERE t.customer_id = r.customer_id )
+GROUP BY customer_id
+UNION ALL
+SELECT customer_id
+     , tenure_mths
+     , tenure_mths_mrr_eur_expansion
+     , tenure_years
+     , tenure_years_mrr_eur_expansion
+FROM cte_tenure
+WHERE tenure_mths >1
+ORDER BY tenure_mths
