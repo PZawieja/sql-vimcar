@@ -20,5 +20,6 @@ WHERE TRUE
 --         AND f.domain_name = 'com.vimcar.bauunion-danko'
 GROUP BY 1
 ;
-SELECT *
-FROM dwh_main.dim_v_gl_trip LIMIT 10
+SELECT * FROM dwh_main.dim_v_gl_trip LIMIT 10;
+
+SELECT

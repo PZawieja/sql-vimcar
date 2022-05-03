@@ -239,4 +239,39 @@ SELECT customer_id
      , tenure_years_mrr_eur_expansion
 FROM cte_tenure
 WHERE tenure_mths >1
-ORDER BY tenure_mths
+ORDER BY tenure_mths;
+
+-- Felix
+WITH cte AS (SELECT i.customer_id
+                  , date_trunc('month', c.min_subscription_start_dt)::DATE AS first_subscription_start_month
+                  , SUM(mrr_eur - refund_mrr_eur)              AS mrr_eur
+                  , STRING_AGG(DISTINCT i.product_group, ' - ') FILTER ( WHERE i.product_group NOT IN ('Other', 'Hardware')) AS products
+             FROM dwh_main.dim_combined_invoice_line i
+                      JOIN dwh_main.dim_combined_subscription s ON s.subscription_id = i.subscription_id
+                      JOIN dwh_main.dim_combined_customer c ON c.customer_id = i.customer_id
+                      JOIN dwh_main.dim_combined_product p
+                           ON i.entity_id = p.entity_id AND i.entity_type = p.entity_type
+             WHERE i.invoice_status <> 'voided'
+               AND i.invoice_provisioning_start_dt <= CURRENT_DATE
+               AND i.invoice_provisioning_end_dt > CURRENT_DATE
+               AND i.full_refund_flag = FALSE
+               AND c.min_subscription_start_dt >= '2021-01-01'
+             GROUP BY i.customer_id, c.min_subscription_start_dt
+             HAVING SUM(mrr_eur - refund_mrr_eur) >= 200)
+SELECT
+    *
+     , CASE
+           WHEN products = 'Admin'
+               THEN 'Admin only'
+           WHEN products = 'Pro'
+               THEN 'Pro only'
+           WHEN products LIKE 'Admin%'
+               OR products LIKE '%Pro%'
+               THEN 'Admin equipped'
+           WHEN products NOT LIKE 'Admin%'
+               AND products NOT LIKE '%Pro%'
+               THEN 'Not Admin equipped'
+    END test
+FROM cte
+
+;
