@@ -14,12 +14,11 @@ FROM data_mart_internal_reporting.ir_ml_customer_revenue f
               ON m.map_unified_customer_id = f.customer_id
          JOIN dwh_main.dim_trip t
               ON t.domain_name = m.map_fb_domain_name
-WHERE TRUE
-  AND f.customer_is_fleet = TRUE
+WHERE f.customer_is_fleet = FALSE -- B2C only
+  AND f.max_subscription_cancelled_dt IS NOT NULL
   AND t.trip_start_ts AT TIME ZONE 'Europe/Berlin' BETWEEN f.reference_dt - INTERVAL '60 days' AND f.reference_dt
---         AND f.domain_name = 'com.vimcar.bauunion-danko'
 GROUP BY 1
 ;
 SELECT * FROM dwh_main.dim_v_gl_trip LIMIT 10;
 
-SELECT
+
