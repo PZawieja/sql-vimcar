@@ -1,19 +1,3 @@
--- Geo tracking active
-SELECT s.domain_name
-, SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_tracking) AS cnt_cars_with_tracking -- Geo-Funktionen aktivieren
-, SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_dynamic_tracking) AS cnt_cars_with_dynamic_tracking -- Fahrer/in ermoglichen Geo-Funktionen zu aktivieren
-FROM dwh_main.dim_gl_vehicle_setting s
-    JOIN dwh_main.dim_v_fb_vehicle v
-        ON v.fb_vehicle_uuid = split_part(gl_vehicle_urn, '/', 2)::UUID
-WHERE greatest(gl_vehicle_setting_has_tracking, gl_vehicle_setting_has_dynamic_tracking) = true
-    AND v.fb_vehicle_end_logbook_ts IS NULL
-GROUP BY s.domain_name
-;
-SELECT  FROM dwh_main.dim_vehicle --264740
-SELECT count(*) FROM dwh_main.dim_car --263273
-SELECT * FROM dwh_main.dim_v_fb_vehicle --263273
-;
-
 
 WITH cte_revenue AS (
     SELECT i.customer_id
@@ -42,35 +26,58 @@ WITH cte_revenue AS (
 --       AND c.customer_id = 'K28704588'
     GROUP BY i.customer_id
 )
+   , cte_active_cars AS (
+    SELECT domain_name
+         , sum(1) AS cnt_active_cars
+    FROM dwh_main.dim_car
+    WHERE car_end_logbook_ts IS NULL GROUP BY domain_name
+)
+   , cte_tracking AS (
+    SELECT s.domain_name
+         , SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_tracking) AS cnt_cars_with_tracking -- Geo-Funktionen aktivieren
+         , SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_dynamic_tracking) AS cnt_cars_with_dynamic_tracking -- Fahrer/in ermoglichen Geo-Funktionen zu aktivieren
+    FROM dwh_main.dim_gl_vehicle_setting s
+             JOIN dwh_main.dim_v_fb_vehicle v
+                  ON v.fb_vehicle_uuid = split_part(gl_vehicle_urn, '/', 2)::UUID
+    WHERE greatest(gl_vehicle_setting_has_tracking, gl_vehicle_setting_has_dynamic_tracking) = true
+      AND v.fb_vehicle_end_logbook_ts IS NULL
+    GROUP BY s.domain_name
+)
+   , cte_inventory_booking AS (
+    SELECT i.domain AS domain_name
+         , SUM(1) cnt_cars_with_booking_enabled
+    FROM dwh_main.dim_v_cal_inventory i
+             JOIN dwh_main.dim_v_fb_vehicle v
+                  ON v.fb_vehicle_uuid = split_part(i.inventory_resource_urn, '/', 2)::UUID
+    WHERE i.inventory_is_bookable = true
+      AND i.inventory_archived_ts IS NULL
+      AND v.fb_vehicle_end_logbook_ts IS NULL
+    GROUP BY i.domain_name
+)
    , cte_foxbox AS (SELECT cf.*
                          , d.has_logbook_b2c
                          , d.has_fleet_logbook
                          , d.has_fleet_pro
                          , d.has_fleet_admin
                          , d.has_fleet_geo
-                         , coalesce(cars.cnt_active_cars, 0) AS cnt_active_cars
+                         , coalesce(ac.cnt_active_cars, 0) AS cnt_active_cars
                          , coalesce(t.cnt_cars_with_tracking, 0) AS cnt_cars_with_tracking
                          , coalesce(t.cnt_cars_with_dynamic_tracking, 0) AS cnt_cars_with_dynamic_tracking
+                         , coalesce(ib.cnt_cars_with_booking_enabled, 0) AS cnt_cars_with_booking_enabled
                     FROM dwh_main.dim_v_dom_configuration cf
                              JOIN dwh_main.dim_v_dom_domain d
                                   ON d.domain_name = cf.domain_name
-                             LEFT JOIN (SELECT domain_name
-                                             , sum(1) AS cnt_active_cars
-                                        FROM dwh_main.dim_car
-                                        WHERE car_end_logbook_ts IS NULL GROUP BY domain_name) cars
-                                    ON cars.domain_name = cf.domain_name
-                             LEFT JOIN (SELECT s.domain_name
-                                             , SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_tracking) AS cnt_cars_with_tracking -- Geo-Funktionen aktivieren
-                                             , SUM(1) FILTER (WHERE s.gl_vehicle_setting_has_dynamic_tracking) AS cnt_cars_with_dynamic_tracking -- Fahrer/in ermoglichen Geo-Funktionen zu aktivieren
-                                        FROM dwh_main.dim_gl_vehicle_setting s
-                                                 JOIN dwh_main.dim_v_fb_vehicle v
-                                                      ON v.fb_vehicle_uuid = split_part(gl_vehicle_urn, '/', 2)::UUID
-                                        WHERE greatest(gl_vehicle_setting_has_tracking, gl_vehicle_setting_has_dynamic_tracking) = true
-                                          AND v.fb_vehicle_end_logbook_ts IS NULL
-                                        GROUP BY s.domain_name) t
+                             LEFT JOIN cte_active_cars ac
+                                    ON ac.domain_name = cf.domain_name
+                             LEFT JOIN cte_tracking t
                                     ON t.domain_name = cf.domain_name
+                             LEFT JOIN cte_inventory_booking ib
+                                       ON ib.domain_name = cf.domain_name
                     WHERE d.domain_is_test = false)
 SELECT r.customer_id
+     , CASE WHEN c.customer_id_chargebee IS NULL THEN 'Shop' ELSE 'Chargebee' END AS subscription_system
+     , c.customer_contact_company_name
+     , c.customer_contact_postal_code
      , STRING_AGG(DISTINCT m.map_fb_domain_name, ',') AS foxbox_domain
 --      , STRING_AGG(DISTINCT m.map_fb_domain_name ||' ('||mapping_method ||')', ',') AS foxbox_domain
      , NULL AS "Domain configuration"
@@ -143,8 +150,8 @@ SELECT r.customer_id
      , r.current_items_other AS "Items Other"
      , sum(f.cnt_active_cars) AS cnt_active_cars
      , sum(f.cnt_cars_with_tracking) AS cnt_cars_with_tracking
-     , sum(f.cnt_cars_with_dynamic_tracking) AS cnt_cars_with_dynamic_tracking
-
+--      , sum(f.cnt_cars_with_dynamic_tracking) AS cnt_cars_with_dynamic_tracking
+     , sum(f.cnt_cars_with_booking_enabled) AS cnt_cars_with_booking_enabled
      , CASE
            WHEN STRING_AGG(DISTINCT m.map_fb_domain_name, ',') IS NULL
                THEN 'No link to Foxbox'
@@ -161,23 +168,35 @@ SELECT r.customer_id
            WHEN sum(f.cnt_cars_with_tracking) <= (current_items_geo + current_items_pro)
                THEN 'cars <= licenses'
     END AS cars_with_tracking_vs_items_check
+--      , CASE
+--            WHEN STRING_AGG(DISTINCT m.map_fb_domain_name, ',') IS NULL
+--                THEN 'No link to Foxbox'
+--            WHEN sum(f.cnt_cars_with_dynamic_tracking) > (current_items_geo + current_items_pro)
+--                THEN 'cars > licenses'
+--            WHEN sum(f.cnt_cars_with_dynamic_tracking) <= (current_items_geo + current_items_pro)
+--                THEN 'cars <= licenses'
+--     END AS cars_with_dynamic_tracking_vs_items_check
      , CASE
            WHEN STRING_AGG(DISTINCT m.map_fb_domain_name, ',') IS NULL
                THEN 'No link to Foxbox'
-           WHEN sum(f.cnt_cars_with_dynamic_tracking) > (current_items_geo + current_items_pro)
+           WHEN sum(f.cnt_cars_with_booking_enabled) > current_items
                THEN 'cars > licenses'
-           WHEN sum(f.cnt_cars_with_dynamic_tracking) <= (current_items_geo + current_items_pro)
+           WHEN sum(f.cnt_cars_with_booking_enabled) <= current_items
                THEN 'cars <= licenses'
-    END AS cars_with_dynamic_tracking_vs_items_check
+    END AS cars_with_booking_enabled_vs_items_check
 FROM cte_revenue r
+         JOIN dwh_main.dim_combined_customer c
+            ON c.customer_id = r.customer_id
          LEFT JOIN dwh_main.map_customer_to_foxbox_domain m
                    ON r.customer_id = m.map_unified_customer_id
          LEFT JOIN cte_foxbox f
                    ON m.map_fb_domain_name = f.domain_name
                        AND m.record_nbr_per_unified_customer_id = 1
 WHERE r.current_mrr_eur > 0
+    AND customer_country <> 'GB'
 -- AND customer_id IN ('K89964693','K33258999')
 GROUP BY current_mrr_eur, r.customer_id, current_mrr_eur_logbook, current_mrr_eur_admin, current_mrr_eur_geo,
          current_mrr_eur_pro, current_mrr_eur_other, r.current_items_logbook, current_items_admin, current_items_geo,
-         current_items_pro, current_items, current_items_other
+         current_items_pro, current_items, current_items_other, c.customer_id_chargebee, c.customer_contact_company_name,
+         c.customer_contact_postal_code
 ;
