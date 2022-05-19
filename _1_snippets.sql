@@ -242,10 +242,14 @@ FROM dwh_main.dim_combined_invoice_line i
               ON i.subscription_id = s.subscription_id
          JOIN dwh_main.dim_combined_customer c
               ON c.customer_id = s.customer_id
+         JOIN dwh_main.dim_combined_product cp
+              ON cp.entity_id = i.entity_id
+                  AND cp.entity_type = i.entity_type
 WHERE i.invoice_status <> 'voided'
 --   AND i.product_group <> 'Hardware'
 --   AND i.full_refund_flag = FALSE
-  AND ((invoice_provisioning_start_dt <= CURRENT_DATE AND invoice_provisioning_end_dt > CURRENT_DATE) OR invoice_provisioning_start_dt < CURRENT_DATE AND invoice_provisioning_end_dt >= CURRENT_DATE) -- condition to retrieve also the invoices ending today
+  AND ((invoice_provisioning_start_dt <= CURRENT_DATE AND invoice_provisioning_end_dt > CURRENT_DATE)
+           OR invoice_provisioning_start_dt < CURRENT_DATE AND invoice_provisioning_end_dt >= CURRENT_DATE) -- condition to retrieve also the invoices ending today
 ;
 
 ------------------------------------------------------------------------------------------------------------

@@ -105,3 +105,6 @@ WHERE date_trunc('month', first_subscription_start_dt) <> coalesce(date_trunc('m
 --AND first_subscription_start_dt <= current_date
 ;
 
+
+
+

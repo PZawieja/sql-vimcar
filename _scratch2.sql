@@ -1,277 +1,212 @@
-K77940214;
-
-WITH customers AS (
-    SELECT
-        r.customer_id
-         , CASE WHEN c.customer_id_chargebee IS NOT NULL THEN 'CB' ELSE 'SH' END source_system
-         , c.customer_id_shop
-         , CASE WHEN r.customer_country = 'GB' THEN 'UK' ELSE 'DACH' END AS customer_country
-         , c.customer_contact_company_name
-         , MIN(r.invoice_provisioning_start_dt) OVER (PARTITION BY r.customer_id) AS first_order_date
-         , r.customer_status
-         , CASE WHEN r.customer_status IN ('cancelled','non_renewing') THEN max_subscription_cancelled_dt END AS cancellation_dt
-         , CASE WHEN p.product_group NOT IN ('Logbook B2C', 'Admin', 'Logbook B2B', 'Geo', 'Pro') THEN 'Other' ELSE p.product_group END AS product
-         , CASE
-               WHEN p.product_group NOT IN ('Logbook B2C', 'Admin', 'Logbook B2B', 'Geo', 'Pro')
-                   THEN 'Other'
-               WHEN p.product_group LIKE 'Logbook%'
-                   THEN 'Logbook'
-               ELSE p.product_group
-        END AS product_journey
-         , CASE WHEN p.product_group IN ('Admin', 'Logbook B2B', 'Geo', 'Pro') THEN TRUE ELSE FALSE END AS is_b2b_product
-         , CASE WHEN reporting_month = MIN(reporting_month) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_first_mth
-         , CASE WHEN reporting_month = date_trunc('month', current_date)::DATE THEN TRUE END AS flag_current_mth
-         , CASE WHEN reporting_month = MAX(reporting_month) FILTER ( WHERE mrr_eur >0) OVER (PARTITION BY r.customer_id) THEN TRUE END AS flag_last_mth_with_value
-         , cm.churn_mth
-         , mrr_eur
-         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) > 0 THEN TRUE END AS flag_expansion
-         , CASE WHEN SUM(mrr_eur_expansion + mrr_eur_contraction) OVER (PARTITION BY r.customer_id, reporting_month ) < 0 THEN TRUE END AS flag_contraction
-         , mrr_eur_expansion + mrr_eur_contraction AS mrr_fluctuation
-         , licenses
-         , MIN(r.reporting_month) FILTER ( WHERE flg_expansion_crossselling = true ) OVER (PARTITION BY r.customer_id) AS first_flg_expansion_crossselling
-    FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
-             JOIN dwh_main.dim_combined_customer c
-                  ON c.customer_id = r.customer_id
-             JOIN dwh_main.dim_combined_product p
-                  ON p.entity_id = r.plan_id
-             LEFT JOIN (SELECT customer_id AS churn_customer_id
-                             , MAX(reporting_month) AS churn_mth
-                        FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
-                        WHERE churn_mth = true
-                        GROUP BY customer_id) cm
-                       ON cm.churn_customer_id = r.customer_id
-    WHERE is_fleet_customer = TRUE
-      AND flag_future = false
---      AND subscription_id = 'V13028084'
---      AND c.customer_id = 'K36527423' -- 506.35 expansion is correct
---       and c.customer_id = '18941291'  -- 374.35 is correct
---        AND r.customer_id = '30003253017'
+WITH map_foxbox_domain AS (
+    SELECT DISTINCT ON (customer_id)
+        customer_id
+                                   , split_part(urn,':', 3) AS foxbox_domain_name
+    FROM customer_user
+    WHERE urn NOT LIKE 'urn:vimcar:com.vimcar.clients%'
 )
-   , customers_2 AS (
-    SELECT
-        c.customer_id
-         , source_system
-         , c.customer_country
-         , customer_contact_company_name
-         , first_order_date
-         , date_trunc('month',first_order_date)::DATE AS first_order_mth
-         , first_flg_expansion_crossselling
---          , age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)
-         , extract(year from age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)) * 12
-        + extract(month from age(first_flg_expansion_crossselling, date_trunc('month',first_order_date)::DATE)) AS first_corssselling_after_n_months
-         , c.customer_status
-         , cancellation_dt
-         , churn_mth
-         , segment_mrr_initial
-         , segment_mrr_current
-         , segment_mrr_most_recent
-         , string_agg(DISTINCT CASE WHEN flag_first_mth = TRUE THEN product END, ','
-                      order by CASE WHEN flag_first_mth = TRUE THEN product END) AS products_initial
-         , string_agg(DISTINCT CASE WHEN flag_last_mth_with_value = TRUE THEN product END, ','
-                      order by CASE WHEN flag_last_mth_with_value = TRUE THEN product END) AS products_most_recently
+   , customers_raw AS
+    (SELECT
+--  outbound_id AS customer_id, -- FRESHSALES Freshsales contact id - match via contact email
+         btrim(left(regexp_replace(contact ->> 'first_name', '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 64)) AS "customer[first_name]"
+          , btrim(left(regexp_replace(contact ->> 'last_name', '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 64)) AS "customer[last_name]"
+          , COALESCE(
+                CASE
+                    WHEN contact ->> 'phone_number' !~ '[0-9]' THEN NULL
+                    ELSE substring(contact ->> 'phone_number' from '#"[0-9[:space:]+.\-]*#"' for '#')
+                    END,
+                CASE
+                    WHEN contact ->> 'mobile_phone_number' !~ '[0-9]' THEN NULL
+                    ELSE substring(contact ->> 'mobile_phone_number' from '#"[0-9[:space:]+.\-]*#"' for '#')
+                    END, NULL)::TEXT AS "customer[phone]"
+          , btrim(regexp_replace(contact ->> 'company_name', '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')) AS "customer[company]"
+          , btrim(lower(regexp_replace(contact ->> 'email', '[ \t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'))) AS "customer[email]"
+          , CASE
+                WHEN contact ->> 'gender' = 'unknown'
+                    THEN 'else'
+                ELSE contact ->> 'gender'
+            END AS "cf_gender_of_the_customer"
+          , outbound_id::TEXT AS "cf_kundennummer"
+          , lower(trim(TRAILING '.' FROM cc.domain))::TEXT AS "cf_shop_domain"
+          , lower(trim(TRAILING '.' FROM f.foxbox_domain_name))::TEXT AS "cf_foxbox_domain"
+          , CASE
+                WHEN rp.payment_method = 'invoice'
+                    THEN 'bank_transfer'
+                WHEN rp.payment_method = 'paypal'
+                    THEN NULL
+                WHEN rp.payment_method = 'card'
+                    THEN 'card'
+                WHEN rp.payment_method = 'sepa'
+                    THEN 'direct_debit'
+            END AS "payment_method[type]"
+          ,
+         CASE
+             WHEN rp.provider = 'adyen'
+                 AND rp.payment_method ='sepa'
+                 THEN 'gw_AzqNJTSewKCj11Lo6' -- static, agreed with Anne on 2022-03-23 (Slack https://vimcar.slack.com/archives/DUMQU3V2P/p1648042373784799)
+--                    THEN adyen_gateway_id -- obsolete since 2022-03-23
+             END AS "payment_method[gateway_account_id]"
+          ,
+         CASE
+             WHEN rp.provider = 'adyen'
+                 AND rp.payment_method = 'sepa'
+                 THEN concat_ws('/', adyen_shopper_reference, adyen_recurring_reference)
+             END AS "payment_method[reference_id]"
+          ,
+         CASE WHEN rp.payment_method IN ('invoice','paypal')
+             OR rp.payment_method IS NULL
+                  THEN 'off'
+              ELSE 'on'
+             END AS "customer[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
+          , 'taxable' AS "customer[taxability]"
+          , 'EUR' AS "customer[preferred_currency_code]"
+          , 0 AS "customer[net_term_days]"
+          , CASE
+                WHEN rp.payment_method = 'sepa'
+                    THEN TRUE
+                ELSE FALSE
+            END AS allow_direct_debit
+          , btrim(regexp_replace(coalesce(billing_contact ->> 'first_name',
+                                          contact ->> 'first_name', i.invoice_billing_contact ->> 'first_name'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')) AS "billing_address[first_name]"
+          , btrim(regexp_replace(coalesce(billing_contact ->> 'last_name',
+                                          contact ->> 'last_name', i.invoice_billing_contact ->> 'last_name'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')) AS "billing_address[last_name]"
+          , btrim(regexp_replace(coalesce(billing_contact ->> 'email',
+                                          contact ->> 'email', i.invoice_billing_contact ->> 'email'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')) AS "billing_address[email]"
+          , btrim(regexp_replace(coalesce(billing_contact ->> 'company_name',
+                                          contact ->> 'company_name', i.invoice_billing_contact ->> 'company_name'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')) AS "billing_address[company]"
+          , COALESCE(
+                CASE
+                    WHEN coalesce(billing_contact ->> 'phone_number',contact ->> 'phone_number',i.invoice_billing_contact ->> 'phone_number' ) !~ '[0-9]' THEN NULL
+                    ELSE substring(coalesce(billing_contact ->> 'phone_number',contact ->> 'phone_number', i.invoice_billing_contact ->> 'phone_number') from '#"[0-9[:space:]+.\-]*#"' for '#')
+                    END,
+                CASE
+                    WHEN coalesce(billing_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number',i.invoice_billing_contact ->> 'mobile_phone_number') !~ '[0-9]' THEN NULL
+                    ELSE substring(coalesce(billing_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number', i.invoice_billing_contact ->> 'mobile_phone_number') from '#"[0-9[:space:]+.\-]*#"' for '#')
+                    END) AS "billing_address[phone]"
+          , btrim(nullif(regexp_replace(coalesce(billing_contact -> 'address' ->> 'street_address',
+                                                 contact -> 'address' ->> 'street_address', i.invoice_billing_contact -> 'address' ->> 'street_address'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a')) AS billing_address_raw
+          , btrim(nullif(regexp_replace(coalesce(billing_contact -> 'address' ->> 'locality',
+                                                 contact -> 'address' ->> 'locality', i.invoice_billing_contact -> 'address' ->> 'locality'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a')) AS "billing_address[city]"
+          , to_char(btrim(
+                            CASE
+                                WHEN coalesce(billing_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code', i.invoice_billing_contact -> 'address' ->> 'postal_code') !~ '[0-9]' THEN NULL
+                                WHEN length(coalesce(billing_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code', i.invoice_billing_contact -> 'address' ->> 'postal_code')) > 10 THEN NULL
+                                ELSE regexp_replace(coalesce(billing_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code', i.invoice_billing_contact -> 'address' ->> 'postal_code'),'[\t\n\r\s\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')
+                                END)::INT,'fm00000') AS "billing_address[zip]"  -- zip codes shorter than 5 digits should have leading 0s (example: K82787217)
+          , btrim(nullif(regexp_replace(coalesce(billing_contact -> 'address' ->> 'country',
+                                                 contact -> 'address' ->> 'country', i.invoice_billing_contact -> 'address' ->> 'country'), '[\t\n\r]*', '', 'g'), 'n/a')) AS "billing_address[country]"
+          , cf_annual_calendar_billing_date
+     FROM public.customer cc
+              JOIN public.shop_extraction_current_batch b  -- join batch table
+                   ON cc.outbound_id = b.customer_id
+         --         JOIN (SELECT DISTINCT customer_id
+--               FROM public.shop_extraction_batch
+--               WHERE coalesce(comment,'dummy') = 'Not sent for migration - multiple customers with the same email address.') b2  -- exclude problematic customers from the batch
+--              ON b2.customer_id = b.customer_id
+              LEFT JOIN (SELECT DISTINCT ON (oi.customer_id)
+                             oi.customer_id
+                                                           , oi.billing_contact AS invoice_billing_contact
+                                                           , oi.shipping_contact AS invoice_shipping_contact
+                         FROM shop_extraction_order_invoice oi
+                                  JOIN customer c
+                                       ON c.id = oi.customer_id
+                                  JOIN shop_extraction_current_batch secb
+                                       ON c.outbound_id = secb.customer_id
+                         ORDER BY oi.customer_id, oi.created_at DESC) i
+                        ON i.customer_id = cc.id
 
-         , string_agg(DISTINCT CASE WHEN flag_first_mth = TRUE THEN product_journey END, ','
-                      order by CASE WHEN flag_first_mth = TRUE THEN product_journey END) AS products_journey_initial
-         , string_agg(DISTINCT CASE WHEN flag_last_mth_with_value = TRUE THEN product_journey END, ','
-                      order by CASE WHEN flag_last_mth_with_value = TRUE THEN product_journey END) AS products_journey_most_recently
---      , product
--- MRR overall:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ),0)  AS mrr_eur_initial
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ),0) AS mrr_eur_current
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS mrr_eur_most_recent_value
-         , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ),0) AS lifetime_mrr_eur_expansion
-         , coalesce(sum(mrr_fluctuation) FILTER ( WHERE flag_contraction = TRUE ),0) AS lifetime_mrr_eur_contraction
--- Licenses overall:
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE ),0) AS licenses_initial
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE ),0) AS licenses_current
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE ),0) AS licenses_most_recent_value
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_initial_b2b
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND is_b2b_product = TRUE),0) AS licenses_current_b2b
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND is_b2b_product = TRUE),0) AS licenses_most_recent_value_b2b
-         , coalesce(fs.fs_vehicles_overall, 0) AS fs_vehicles_overall
-         , coalesce(cfg.domain_configuration_product, 'unknown') AS foxbox_configuration_product
------- Admin:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin'),0)  AS mrr_eur_initial_admin
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS mrr_eur_current_admin
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS mrr_eur_most_recent_value_admin
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Admin' ),0) AS licenses_initial_admin
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Admin'),0) AS licenses_current_admin
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Admin'),0) AS licenses_most_recent_value_admin
------- Logbook:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product LIKE 'Logbook%'),0)  AS mrr_eur_initial_logbook
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product LIKE 'Logbook%'),0) AS mrr_eur_current_logbook
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product LIKE 'Logbook%'),0) AS mrr_eur_most_recent_value_logbook
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product LIKE 'Logbook%' ),0) AS licenses_initial_logbook
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product LIKE 'Logbook%'),0) AS licenses_current_logbook
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product LIKE 'Logbook%'),0) AS licenses_most_recent_value_logbook
------- Geo:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Geo'),0)  AS mrr_eur_initial_geo
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Geo'),0) AS mrr_eur_current_geo
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Geo'),0) AS mrr_eur_most_recent_value_geo
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Geo' ),0) AS licenses_initial_geo
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Geo'),0) AS licenses_current_geo
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Geo'),0) AS licenses_most_recent_value_geo
------- Pro:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Pro'),0)  AS mrr_eur_initial_pro
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Pro'),0) AS mrr_eur_current_pro
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Pro'),0) AS mrr_eur_most_recent_value_pro
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Pro' ),0) AS licenses_initial_pro
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Pro'),0) AS licenses_current_pro
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Pro'),0) AS licenses_most_recent_value_pro
------- Other:
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Other'),0)  AS mrr_eur_initial_other
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Other'),0) AS mrr_eur_current_other
-         , coalesce(sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Other'),0) AS mrr_eur_most_recent_value_other
-         , coalesce(sum(licenses) FILTER ( WHERE flag_first_mth = TRUE AND product = 'Other' ),0) AS licenses_initial_other
-         , coalesce(sum(licenses) FILTER ( WHERE flag_current_mth = TRUE AND product = 'Other'),0) AS licenses_current_other
-         , coalesce(sum(licenses) FILTER ( WHERE flag_last_mth_with_value = TRUE AND product = 'Other'),0) AS licenses_most_recent_value_other
-    FROM customers c
-             JOIN (SELECT customer_id
-                        , CASE
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 1000 THEN 'XL (1000+)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 500 THEN 'L (500-1000)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 200 THEN 'M (200-500)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) > 50 THEN 'S (50-200)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_first_mth = TRUE ) >= 0 THEN 'XS (0-50)'
-                              ELSE 'Other'
-            END AS segment_mrr_initial
-                        , CASE
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 1000 THEN 'XL (1000+)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 500 THEN 'L (500-1000)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 200 THEN 'M (200-500)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) > 50 THEN 'S (50-200)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_current_mth = TRUE ) >= 0 THEN 'XS (0-50)'
-                              ELSE 'Other (churned already)'
-            END AS segment_mrr_current
-                        , CASE
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 1000 THEN 'XL (1000+)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 500 THEN 'L (500-1000)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 200 THEN 'M (200-500)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) > 50 THEN 'S (50-200)'
-                              WHEN sum(mrr_eur) FILTER ( WHERE flag_last_mth_with_value = TRUE ) >= 0 THEN 'XS (0-50)'
-                              ELSE 'Other'
-            END AS segment_mrr_most_recent
-                   FROM customers
-                   GROUP BY customer_id
-    ) t1
-                  ON t1.customer_id = c.customer_id
-             LEFT JOIN (SELECT fs_account_contact_id, SUM(fs_account_cf_vehicles_overall) AS fs_vehicles_overall
-                        FROM dwh_main.dim_fs_account
-                        WHERE fs_account_cf_vehicles_overall >0
-                        GROUP BY fs_account_contact_id) fs
-                       ON fs.fs_account_contact_id::varchar = c.customer_id
-             LEFT JOIN (SELECT
-                            m.map_unified_customer_id
-                             , string_agg(DISTINCT d.domain_configuration_template_match, ',') AS domain_configuration_product
-                        FROM dwh_main.map_customer_to_foxbox_domain m
-                                 JOIN dwh_main.dim_v_dom_domain d
-                                      ON d.domain_name = m.map_fb_domain_name
-                        WHERE record_nbr_per_unified_customer_id = 1
-                          AND map_fb_main_domain_name IS NOT NULL
-                        GROUP BY m.map_unified_customer_id) cfg
-                       ON cfg.map_unified_customer_id = c.customer_id
+              LEFT JOIN (SELECT
+                             domain
+                              , provider
+                              , payment_method
+                              , adyen_shopper_reference
+                              , adyen_recurring_reference
+--                                    , adyen_gateway_id
+                         FROM (SELECT p.domain
+                                    , row_number() OVER (PARTITION BY p.domain ORDER BY p.authorized DESC) AS row_nbr
+                                    , p.payment_method ->> 'type' AS payment_method
+                                    , p.provider
+                                    , an.payload -> 'notificationItems' -> 0 -> 'NotificationRequestItem' -> 'additionalData' ->> 'shopperReference' AS adyen_shopper_reference
+                                    , arr.recurring_detail_reference AS adyen_recurring_reference
+--                                     , ard.recurring_reference AS adyen_recurring_reference_old
+                               FROM public.payment p
+                                        LEFT JOIN adyen_recurring_detail ard
+                                                  ON ard.domain = p.domain
+                                        LEFT JOIN public.adyen_notification an
+                                                  ON p.psp_reference_id = an.payload -> 'notificationItems' -> 0 -> 'NotificationRequestItem' ->> 'pspReference'
+                                        LEFT JOIN public.shop_extraction_recurring_ref arr
+                                                  ON arr.shopper_reference::text = an.payload -> 'notificationItems' -> 0 -> 'NotificationRequestItem' -> 'additionalData'  ->> 'shopperReference'
+                               WHERE status = 'authorised'
+                              ) recent_payments
+                         WHERE row_nbr = 1) rp
+                        ON rp.domain = cc.domain
 
-    GROUP BY c.customer_id, source_system, cancellation_dt, customer_country, customer_contact_company_name, first_order_date, first_flg_expansion_crossselling, churn_mth, customer_status, churn_mth,
-             segment_mrr_initial, segment_mrr_current, segment_mrr_most_recent, fs.fs_vehicles_overall, cfg.domain_configuration_product--, product;
-)
-SELECT * FROM customers_2;
+              LEFT JOIN (SELECT customer_id AS customer_uuid
+                              , to_char(MIN(started AT TIME ZONE 'Europe/Berlin')::DATE, 'YYYY-MM-DD HH24:MI:SS') AS cf_annual_calendar_billing_date
+                         FROM contract
+                         GROUP BY customer_id) ctr
+                        ON ctr.customer_uuid = cc.id
+              LEFT JOIN map_foxbox_domain f
+                        ON f.customer_id = cc.id
+     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
+       AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
 
-
-
-WITH customers AS (SELECT customer_id
-                        , product_group
-                        , CASE
-                              WHEN SUM(mrr_eur_expansion + mrr_eur_contraction)
-                                   OVER (PARTITION BY customer_id, reporting_month, product_group ) > 0 THEN TRUE END AS flag_expansion
-                        , flg_expansion_crossselling
-                        , mrr_eur_expansion + mrr_eur_contraction AS mrr_fluctuation
-                        , licenses
-                        , EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) * 12 +
-                          EXTRACT(MONTH FROM AGE(reporting_month, first_invoice_mth)) + 1 AS                  tenure_mths
-                        , EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) + 1 AS                   tenure_years
-                        , CASE
-                              WHEN ((EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)) * 12 +
-                                     EXTRACT(MONTH FROM AGE(reporting_month, first_invoice_mth))) /
-                                    NULLIF(EXTRACT(YEAR FROM AGE(reporting_month, first_invoice_mth)), 0)) = 12
-                                  THEN TRUE
-                              ELSE FALSE END AS                                                           flag_tenure_year_start
-                   FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report
-                   WHERE is_fleet_customer = TRUE
-                     AND flag_future = FALSE
-                     AND customer_id = 'K77940214' -- 506.35 expansion is correct
---       and customer_id = '18941291'  -- 374.35 is correct
---    AND subscription_id = 'V13028084'
---     AND customer_id = '11436777' -- multiple products
-)
-   , cte_tenure AS (
-    SELECT c1.customer_id
---      , c1.product_group
-         , c1.tenure_mths
-         , COALESCE(SUM(c1.mrr_fluctuation) FILTER ( WHERE c1.flag_expansion = TRUE ), 0) AS tenure_mths_mrr_eur_expansion
-         , c1.tenure_years
-         , SUM(c2.tenure_years_mrr_eur_expansion) AS tenure_years_mrr_eur_expansion
-    FROM customers c1
-             JOIN (SELECT customer_id
-                        , tenure_years
-                        , product_group
-                        , COALESCE(SUM(mrr_fluctuation) FILTER ( WHERE flag_expansion = TRUE ), 0) AS tenure_years_mrr_eur_expansion
-                   FROM customers
-                   GROUP BY customer_id, product_group, tenure_years) c2
-                  ON c2.customer_id = c1.customer_id
-                      AND c2.product_group = c1.product_group
-                      AND c2.tenure_years = c1.tenure_years
-    GROUP BY c1.customer_id, c1.tenure_mths, c1.tenure_years, c1.flag_expansion
-)
--- SELECT * FROM cte_tenure;
-SELECT customer_id
-     , 0 AS tenure_mths
-     , SUM(mrr_eur_new) AS tenure_mths_mrr_eur_expansion
-     , 0 AS tenure_years
-     , SUM(mrr_eur_new) AS tenure_years_mrr_eur_expansion
-FROM data_mart_internal_reporting.ir_m_sh_cb_investor_report r
-WHERE EXISTS (SELECT 1 FROM cte_tenure t WHERE t.customer_id = r.customer_id )
-GROUP BY customer_id
-UNION ALL
-SELECT customer_id
-     , tenure_mths
-     , tenure_mths_mrr_eur_expansion
-     , tenure_years
-     , tenure_years_mrr_eur_expansion
-FROM cte_tenure
-WHERE tenure_mths >1
-ORDER BY tenure_mths;
-
--- Felix
-WITH cte AS (SELECT i.customer_id
-                  , date_trunc('month', c.min_subscription_start_dt)::DATE AS first_subscription_start_month
-                  , SUM(mrr_eur - refund_mrr_eur)              AS mrr_eur
-                  , STRING_AGG(DISTINCT i.product_group, ' - ') FILTER ( WHERE i.product_group NOT IN ('Other', 'Hardware')) AS products
-             FROM dwh_main.dim_combined_invoice_line i
-                      JOIN dwh_main.dim_combined_subscription s ON s.subscription_id = i.subscription_id
-                      JOIN dwh_main.dim_combined_customer c ON c.customer_id = i.customer_id
-                      JOIN dwh_main.dim_combined_product p
-                           ON i.entity_id = p.entity_id AND i.entity_type = p.entity_type
-             WHERE i.invoice_status <> 'voided'
-               AND i.invoice_provisioning_start_dt <= CURRENT_DATE
-               AND i.invoice_provisioning_end_dt > CURRENT_DATE
-               AND i.full_refund_flag = FALSE
-               AND c.min_subscription_start_dt >= '2021-01-01'
-             GROUP BY i.customer_id, c.min_subscription_start_dt
-             HAVING SUM(mrr_eur - refund_mrr_eur) >= 200)
+--     AND outbound_id IN ('K15710634')
+    )
+-- SELECT * FROM customers_raw;
 SELECT
-    *
+    "customer[first_name]"
+     , "customer[last_name]"
+     , "customer[phone]"
+--      , replace("customer[company]",',','.') AS "customer[company]" -- uncomment
+     , "customer[company]" -- delete
+     , split_part("customer[email]",',',1) AS "customer[email]"
+     , cf_gender_of_the_customer
+     , cf_kundennummer
+     , cf_shop_domain
+     , coalesce(cf_foxbox_domain, cf_shop_domain) AS cf_foxbox_domain
+     , "payment_method[type]"
+     , "payment_method[gateway_account_id]"
+     , "payment_method[reference_id]"
+     , "customer[auto_collection]"
+     , "customer[taxability]"
+     , NULL AS "customer[vat_number]"
+     , "customer[preferred_currency_code]"
+     , "customer[net_term_days]"
+     , allow_direct_debit
+     , 'de' AS "locale"
+     , NULL AS "customer[meta_data]"
+     , NULL AS "customer[consolidated_invoicing]"
+     , NULL AS "customer[invoice_notes]"
+     , "billing_address[first_name]"
+     , "billing_address[last_name]"
+     , split_part("billing_address[email]",',',1) AS "billing_address[email]"
+     , "billing_address[company]"
+     , "billing_address[phone]"
      , CASE
-           WHEN products = 'Admin'
-               THEN 'Admin only'
-           WHEN products = 'Pro'
-               THEN 'Pro only'
-           WHEN products LIKE 'Admin%'
-               OR products LIKE '%Pro%'
-               THEN 'Admin equipped'
-           WHEN products NOT LIKE 'Admin%'
-               AND products NOT LIKE '%Pro%'
-               THEN 'Not Admin equipped'
-    END test
-FROM cte
-
+           WHEN length(substring(billing_address_raw from '^.*?(?=[0-9]|$)')) = 0
+               THEN billing_address_raw
+           ELSE substring(billing_address_raw from '^.*?(?=[0-9]|$)')
+    END  AS "billing_address[line1]" -- street
+     , CASE
+           WHEN length(substring(billing_address_raw from '^.*?(?=[0-9]|$)')) = 0
+               THEN NULL
+           ELSE substring(billing_address_raw from '[0-9].*$')
+    END  AS "billing_address[line2]" -- house number
+     , NULL AS "billing_address[line3]" -- original address (street and number)
+     , "billing_address[city]"
+     , NULL AS "billing_address[state_code]"
+     , NULL AS "billing_address[state]"
+     , "billing_address[zip]"
+     , "billing_address[country]"
+     , 'not_validated' AS "billing_address[validation_status]"
+     , NULL AS "customer[registered_for_gst]"
+     , NULL AS "customer[entity_code]"
+     , NULL AS "customer[exempt_number]"
+     , cf_annual_calendar_billing_date -- this should be uncommented for the ACTIVE customers!!
+FROM customers_raw
+-- WHERE cf_kundennummer = 'K17774689' -- customer from batch E, good for checking the Adyen details
+-- WHERE cf_kundennummer IN ('K80460642','K28546759','K68785204','K24606900','69840691','K34971666','K28292707','K83098180') -- examples for address parsing
+-- WHERE "billing_address[line1]" IS NULL
+--WHERE cf_kundennummer = 'K69839331'
 ;
