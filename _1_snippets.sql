@@ -538,3 +538,38 @@ WHERE 1=1
 --      AND principal_deleted_ts IS NULL
 -- AND s.domain_name is null
 ;
+
+-- Customer products:
+WITH cte_customers AS (
+    SELECT i.customer_id
+         , m.map_fb_domain_name AS foxbox_domain_name
+         , string_agg(DISTINCT product_group, ', ') AS products
+         , bool_or(CASE WHEN product_group = 'Geo' THEN TRUE ELSE FALSE END) AS has_geo
+         , bool_or(CASE WHEN product_group LIKE 'Logbook%' THEN TRUE ELSE FALSE END) AS has_logbook
+         , bool_or(CASE WHEN product_group <> 'Geo' AND product_group NOT LIKE 'Logbook%' THEN TRUE ELSE FALSE END) AS has_other_products
+         , coalesce(sum(mrr_eur-refund_mrr_eur),0) AS current_mrr_eur
+    FROM dwh_main.dim_combined_invoice_line i
+             JOIN dwh_main.dim_combined_customer c
+                  ON c.customer_id = i.customer_id
+             LEFT JOIN dwh_main.map_customer_to_foxbox_domain m
+                       ON m.map_unified_customer_id = c.customer_id
+                           AND m.record_nbr_per_unified_customer_id = 1
+    WHERE invoice_status <> 'voided'
+      AND product_group NOT IN ('Hardware', 'Other')
+      AND ((invoice_provisioning_start_dt <= CURRENT_DATE AND invoice_provisioning_end_dt > CURRENT_DATE)
+        OR invoice_provisioning_start_dt < CURRENT_DATE AND invoice_provisioning_end_dt >= CURRENT_DATE) -- condition to retrieve also the invoices ending today
+    GROUP BY i.customer_id, m.map_fb_domain_name
+)
+SELECT
+    customer_id, current_mrr_eur, foxbox_domain_name, products, has_geo, has_logbook
+     , p.principal_uuid AS user_uuid
+     , p.email
+     , p.principal_first_name AS user_first_name
+     , p.principal_last_name AS user_last_name
+FROM cte_customers c
+         LEFT JOIN dwh_main.dim_principal p
+                   ON p.domain_name = c.foxbox_domain_name
+                       AND principal_deleted_ts IS NULL
+                       AND principal_is_lockedaccount IS FALSE
+                       AND principal_is_locked IS FALSE
+WHERE has_other_products = FALSE
