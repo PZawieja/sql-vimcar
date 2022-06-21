@@ -99,6 +99,8 @@ WITH discounts_in_eur_amount AS (
 --     AND cc.outbound_id = 'K41608077' -- prorated, multiple items (SLACK https://vimcar.slack.com/archives/C03FZHZ16MP/p1655296704949729)
 --       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
+--     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
+-- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_inv_ctr_prod AS (
@@ -718,7 +720,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
-AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
+-- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
     GROUP BY 1,2,3,4,5,6
 --     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )

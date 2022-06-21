@@ -472,12 +472,13 @@ CASE WHEN array_agg(i.product_group) @> '{"Geo"}' THEN TRUE ELSE FALSE END AS ha
 -- calculate time difference in seconds:
 extract(EPOCH FROM event_end_ts::timestamp - event_start_ts::timestamp) ;
 
+SELECT * FROM dwh_main.dim_principal WHERE principal_uuid = '1eae1f7a-eafe-4a2c-9913-5bbc73eabc73'
 ----------------
 -- Foxbox domain MRR and status, match to subscription:
 WITH cte_users AS (
     SELECT p.domain_name
          , p.main_domain_name
-         , SUM(1) FILTER ( WHERE principal_deleted_ts IS NULL ) AS cnt_users
+         , SUM(1) FILTER ( WHERE principal_deleted_ts IS NULL AND principal_is_lockedaccount = FALSE) AS cnt_users
     FROM dwh_main.dim_principal p
              JOIN dwh_main.dim_v_dom_domain d
                   ON d.domain_name = p.domain_name
@@ -535,33 +536,61 @@ FROM cte_domains d
          LEFT JOIN cte_domain_status s
                    ON d.domain_name = s.domain_name
 WHERE 1=1
+    AND p.principal_deleted_ts IS NULL
+    AND p.principal_is_lockedaccount = FALSE
 --      AND principal_deleted_ts IS NULL
 -- AND s.domain_name is null
 ;
 
--- Customer products:
-WITH cte_customers AS (
+-- K55821225
+
+WITH cte_connected_cars AS (
+    SELECT domain_name
+         , sum(1) AS cnt_cars
+         , sum(1) FILTER ( WHERE car_imei IS NOT NULL) AS cnt_cars_with_dongle
+    FROM dwh_main.dim_car
+    GROUP BY domain_name
+)
+, cte_customers AS (
     SELECT i.customer_id
+         , c.customer_contact_company_name
+         , c.customer_status
          , m.map_fb_domain_name AS foxbox_domain_name
          , string_agg(DISTINCT product_group, ', ') AS products
          , bool_or(CASE WHEN product_group = 'Geo' THEN TRUE ELSE FALSE END) AS has_geo
-         , bool_or(CASE WHEN product_group LIKE 'Logbook%' THEN TRUE ELSE FALSE END) AS has_logbook
-         , bool_or(CASE WHEN product_group <> 'Geo' AND product_group NOT LIKE 'Logbook%' THEN TRUE ELSE FALSE END) AS has_other_products
          , coalesce(sum(mrr_eur-refund_mrr_eur),0) AS current_mrr_eur
+         , coalesce(cc.cnt_cars, 0) AS cnt_cars
+         , coalesce(cc.cnt_cars_with_dongle, 0) AS cnt_cars_with_dongle
     FROM dwh_main.dim_combined_invoice_line i
              JOIN dwh_main.dim_combined_customer c
                   ON c.customer_id = i.customer_id
-             LEFT JOIN dwh_main.map_customer_to_foxbox_domain m
+             JOIN dwh_main.map_customer_to_foxbox_domain m
                        ON m.map_unified_customer_id = c.customer_id
                            AND m.record_nbr_per_unified_customer_id = 1
+             LEFT JOIN cte_connected_cars cc -- connected cars
+                    ON cc.domain_name = m.map_fb_domain_name
     WHERE invoice_status <> 'voided'
       AND product_group NOT IN ('Hardware', 'Other')
       AND ((invoice_provisioning_start_dt <= CURRENT_DATE AND invoice_provisioning_end_dt > CURRENT_DATE)
         OR invoice_provisioning_start_dt < CURRENT_DATE AND invoice_provisioning_end_dt >= CURRENT_DATE) -- condition to retrieve also the invoices ending today
-    GROUP BY i.customer_id, m.map_fb_domain_name
+    GROUP BY i.customer_id, c.customer_contact_company_name, c.customer_status, m.map_fb_domain_name,
+             cc.domain_name, cc.cnt_cars, cc.cnt_cars_with_dongle
 )
 SELECT
-    customer_id, current_mrr_eur, foxbox_domain_name, products, has_geo, has_logbook
+    customer_id
+     , customer_contact_company_name
+     , customer_status
+     , current_mrr_eur
+     , CASE
+        WHEN current_mrr_eur >= 200
+            THEN TRUE
+        ELSE FALSE
+        END AS "is M+ customer"
+     , foxbox_domain_name
+     , products
+     , has_geo
+     , cnt_cars
+     , cnt_cars_with_dongle
      , p.principal_uuid AS user_uuid
      , p.email
      , p.principal_first_name AS user_first_name
@@ -572,4 +601,12 @@ FROM cte_customers c
                        AND principal_deleted_ts IS NULL
                        AND principal_is_lockedaccount IS FALSE
                        AND principal_is_locked IS FALSE
-WHERE has_other_products = FALSE
+WHERE has_geo = TRUE
+    AND foxbox_domain_name NOT LIKE 'com.vimcar.gb.%'
+AND cnt_cars_with_dongle = 0
+;
+
+SELECT * FROM dwh_main.dim_v_fb_dataprovider_handle
+SELECT *
+FROM dwh_main.dim_car
+WHERE domain_name = 'com.vimcar.de.k44928493'
