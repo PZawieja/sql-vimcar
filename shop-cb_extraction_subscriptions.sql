@@ -3,23 +3,24 @@ WITH discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
         contract_outbound_id
                                             , CASE
-                                                  WHEN round((discount -> 'value' ->> 'amount')::NUMERIC
-                                                                 / ((discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4) < 1
+                                                  WHEN round((i.discount -> 'value' ->> 'amount')::NUMERIC
+                                                                 / ((i.discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4) < 1
                                                       THEN concat_ws('', 'dummy_pct_0_', split_part(
-                                                          round((discount -> 'value' ->> 'amount')::NUMERIC
-                                                                    / ((discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4)::TEXT
+                                                          round((i.discount -> 'value' ->> 'amount')::NUMERIC
+                                                                    / ((i.discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4)::TEXT
                                                       ,'.', 2))
-                                                  WHEN round((discount -> 'value' ->> 'amount')::NUMERIC
-                                                                 / ((discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4) >= 1
+                                                  WHEN round((i.discount -> 'value' ->> 'amount')::NUMERIC
+                                                                 / ((i.discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4) >= 1
                                                       THEN concat_ws('', 'dummy_pct_1_', split_part(
-                                                          round((discount -> 'value' ->> 'amount')::NUMERIC
-                                                                    / ((discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4)::TEXT
+                                                          round((i.discount -> 'value' ->> 'amount')::NUMERIC
+                                                                    / ((i.discount -> 'value' ->> 'amount')::NUMERIC + (total_price -> 'gross' ->> 'amount')::NUMERIC),4)::TEXT
                                                       ,'.', 2))
         END AS discount_amount_translated_to_percentage
-    FROM shop_extraction_order_invoice
-    WHERE discount ->> 'type' = 'amount'
-      AND (discount -> 'value' ->> 'amount')::NUMERIC >0
+    FROM shop_extraction_order_invoice i
+    WHERE i.discount ->> 'type' = 'amount'
+      AND (i.discount -> 'value' ->> 'amount')::NUMERIC >0
 -- AND contract_outbound_id = 'V47424542' -- problematic contract, discount 282,89 € needs to be split into 3 subs
+--     AND contract_outbound_id = 'V47424542'
     ORDER BY contract_outbound_id, created DESC
 )
    , cte_contract_product AS (
@@ -48,7 +49,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
---       and cc.outbound_id = 'K67416935'
+--     AND cc.outbound_id = 'K99339447'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_invoice_product AS (
@@ -101,6 +102,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
 -- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
+--     AND cc.outbound_id = 'K99339447'
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_inv_ctr_prod AS (
@@ -209,14 +211,14 @@ WITH discounts_in_eur_amount AS (
                ELSE 'on'
         END AS "subscription[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
          , CASE
-               WHEN d.discount_amount_translated_to_percentage IS NOT NULL
-                   THEN d.discount_amount_translated_to_percentage
                WHEN coupon_code IS NOT NULL
                    THEN coupon_code
                WHEN round(CASE WHEN discount ->> 'type' = 'percentage' THEN discount ->> 'value' END::NUMERIC,4) >= 1
                    THEN concat_ws('', 'dummy_pct_1_', split_part((round((discount ->> 'value')::numeric, 4))::TEXT,'.', 2))
                WHEN round(CASE WHEN discount ->> 'type' = 'percentage' THEN discount ->> 'value' END::NUMERIC,4) > 0
                    THEN concat_ws('', 'dummy_pct_0_', split_part((round((discount ->> 'value')::numeric, 4))::TEXT,'.', 2))
+               WHEN d.discount_amount_translated_to_percentage IS NOT NULL
+                   THEN d.discount_amount_translated_to_percentage
         --                WHEN round(CASE WHEN discount ->> 'type' = 'amount' THEN discount -> 'value' ->> 'amount' END::numeric) > 0
 --                    THEN concat_ws('', 'dummy_gross_eur_', discount -> 'value' ->> 'amount' )
         END AS "coupon_ids[0]"
@@ -276,7 +278,7 @@ WITH discounts_in_eur_amount AS (
                        ON rp.domain = cu.domain
     WHERE coalesce(c.cancelation_reason,'dummy') <> 'ghost contract'
 )
---    SELECT * FROM subscriptions_1 WHERE shop_contract_id IN ('V60796615','V39310061') ;
+--    SELECT * FROM subscriptions_1 ; WHERE shop_contract_id IN ('V60796615','V39310061') ;
    , subscriptions_dates_precalculation AS (
     SELECT s.*
          , CASE
@@ -358,7 +360,7 @@ WITH discounts_in_eur_amount AS (
                         GROUP BY shop_contract_id) three_year
                        ON three_year.contract_id_from_shop = s2.shop_contract_id
 )
--- SELECT * FROM subscriptions_dates_precalculation_2 WHERE shop_contract_id IN ('V60796615','V39310061') ;
+-- SELECT * FROM subscriptions_dates_precalculation_2; WHERE shop_contract_id IN ('V60796615','V39310061') ;
    , subscriptions_2 AS (
     SELECT
         "customer[email]"
@@ -373,6 +375,12 @@ WITH discounts_in_eur_amount AS (
          , "subscription[plan_unit_price]"
          -- STATUS MAPPING: https://www.notion.so/vimcar/Migration-Review-Learnings-Decisions-To-Dos-f32758b58cb54d3e8a026b7821d0632f
          , CASE
+               WHEN "subscription[current_term_end]" + '14 days' < current_date
+                   THEN 'cancelled'
+               WHEN "subscription[status]" = 'active'
+                   AND "subscription[plan_quantity]" < 1
+                   AND "contract term end" < current_date
+                   THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
                    AND "subscription[plan_quantity]" < 1
                    THEN 'non_renewing'
@@ -439,7 +447,7 @@ WITH discounts_in_eur_amount AS (
         END AS default_billing_cycles
     FROM subscriptions_dates_precalculation_2
 )
--- SELECT * FROM subscriptions_2 WHERE "subscription[cf_vertragsnummer]"  IN ('V60796615','V39310061') ;
+-- SELECT * FROM subscriptions_2 ;
    , subscriptions_3 AS (SELECT "customer[email]"
                               , shop_customer_id
                               , "subscription[id]"
@@ -450,8 +458,8 @@ WITH discounts_in_eur_amount AS (
                               , "subscription[status]"
                               , CASE WHEN "subscription[status]" = 'future' THEN "subscription[started_at]" END AS "subscription[start_date]"
                               , CASE WHEN "subscription[status]" <> 'future' THEN "subscription[started_at]" END AS "subscription[started_at]"
-                              , CASE WHEN "subscription[status]" <> 'future' THEN "subscription[current_term_start]" END AS "subscription[current_term_start]"
-                              , CASE WHEN "subscription[status]" <> 'future' THEN "subscription[current_term_end]" END AS "subscription[current_term_end]"
+                              , CASE WHEN "subscription[status]" IN ('active', 'non_renewing') THEN "subscription[current_term_start]" END AS "subscription[current_term_start]"
+                              , CASE WHEN "subscription[status]" IN ('active', 'non_renewing') THEN "subscription[current_term_end]" END AS "subscription[current_term_end]"
                               , CASE
                                     WHEN "subscription[status]" != 'cancelled'
                                         THEN NULL -- added on 2022-03-16 as per CB advise: https://vimcar.slack.com/archives/C02NJSXE57Z/p1647363276161959
@@ -461,8 +469,11 @@ WITH discounts_in_eur_amount AS (
                                     WHEN "subscription[cancelled_at]" IS NOT NULL
                                         THEN coalesce("subscription[current_term_start]","subscription[started_at]" + interval '1 day')
                                     WHEN "subscription[status]" <> 'active'
+                                        AND "contract term end" <= current_date
+                                        THEN "contract term end" - INTERVAL '1 day'
+                                    WHEN "subscription[status]" <> 'active'
                                         OR ("subscription[plan_quantity]" = 0 AND "subscription[status]" = 'active')
-                                        THEN coalesce("subscription[current_term_start]","subscription[started_at]") + interval '1 day'
+                                        THEN coalesce("subscription[current_term_start]","subscription[started_at]" + interval '1 day')
         END AS "subscription[cancelled_at]"
                               , CASE WHEN "subscription[status]" = 'cancelled' THEN cancel_reason_code END AS cancel_reason_code
                               , CASE
@@ -472,13 +483,13 @@ WITH discounts_in_eur_amount AS (
                                         THEN "contract term end"
         END AS "contract term end"
                               , CASE
-                                    WHEN "subscription[status]" <> 'future'
-                                        AND is_3y_plan = FALSE
+                                    WHEN "subscription[status]" = 'future'
+                                        THEN "subscription[started_at]"
+                                    WHEN is_3y_plan = FALSE
                                         THEN "contract term end" - INTERVAL '1 year' -- logic for PRORATED ??
-                                    WHEN "subscription[status]" <> 'future'
-                                        AND is_3y_plan = TRUE
+                                    WHEN is_3y_plan = TRUE
                                         THEN "contract term end" - INTERVAL '3 years' -- logic for PRORATED ??
-        END AS "contract_term[contract_start]"
+                                END AS "contract_term[contract_start]"
                               , cf_lifetime_licence
                               , "subscription[auto_collection]"
                               , coupon_code_temp
@@ -531,7 +542,7 @@ WITH discounts_in_eur_amount AS (
         -- 3y which completed the first 36 months:
                WHEN is_3y_plan = TRUE
                    AND is_monthly_billing_plan = TRUE
-                   AND "subscription[started_at]" + interval '3 years' >= current_date
+                   AND "subscription[started_at]" + interval '3 years' <= current_date
                    THEN 12
         -- 1y and 3y, yearly billing:
                WHEN is_monthly_billing_plan = FALSE
@@ -586,7 +597,7 @@ WITH discounts_in_eur_amount AS (
          , NULL AS "contract_term[id]"
          , NULL AS "contract_term[total_amount_raised]"
          , NULL AS "contract_term[action_at_term_end]"
-         , NULL AS "contract_term[cancellation_cutoff_period]"
+         , 28 AS "contract_term[cancellation_cutoff_period]"
          , NULL AS "transaction[amount]"
          , NULL AS "transaction[payment_method]"
          , NULL AS "transaction[reference_number]"
@@ -608,7 +619,7 @@ SELECT * FROM subscriptions_4 WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 
 
 ------------------------------------------------------------------------------------------------
--- RICE INCREASE FIX (DRAFT)
+-- PRICE INCREASE FIX (DRAFT)
 ------------------------------------------------------------------------------------------------
 
 -- sub_contracts SOLUTION FOR DATES 2022-06-17
@@ -1207,7 +1218,7 @@ WITH discounts_in_eur_amount AS (
          , NULL AS "contract_term[id]"
          , NULL AS "contract_term[total_amount_raised]"
          , NULL AS "contract_term[action_at_term_end]"
-         , NULL AS "contract_term[cancellation_cutoff_period]"
+         , 28 AS "contract_term[cancellation_cutoff_period]"
          , NULL AS "transaction[amount]"
          , NULL AS "transaction[payment_method]"
          , NULL AS "transaction[reference_number]"
