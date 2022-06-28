@@ -49,7 +49,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
---     AND cc.outbound_id = 'K99339447'
+      AND cc.outbound_id = 'K80018789'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_invoice_product AS (
@@ -102,9 +102,10 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
 -- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
---     AND cc.outbound_id = 'K99339447'
+      AND cc.outbound_id = 'K80018789'
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
+--    SELECT * FROM cte_invoice_product;   ----- TESTING
    , cte_inv_ctr_prod AS (
     SELECT i.shop_contract_id
          , i.plan_id
@@ -232,22 +233,22 @@ WITH discounts_in_eur_amount AS (
                     btrim(regexp_replace(contact ->> 'company_name', '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'))) AS "shipping_address[company]"
          , btrim(COALESCE(
             CASE
-                WHEN coalesce(shipping_contact ->> 'phone_number',contact ->> 'phone_number') !~ '[0-9]' THEN NULL
-                ELSE substring(coalesce(shipping_contact ->> 'phone_number',contact ->> 'phone_number') from '#"[0-9[:space:]+.\-]*#"' for '#')
+                WHEN btrim(coalesce(shipping_contact ->> 'phone_number',contact ->> 'phone_number')) !~ '[0-9]' THEN NULL
+                ELSE substring(btrim(coalesce(shipping_contact ->> 'phone_number',contact ->> 'phone_number')) from '#"[0-9[:space:]+.\-]*#"' for '#')
                 END,
             CASE
-                WHEN coalesce(shipping_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number') !~ '[0-9]' THEN NULL
-                ELSE substring(coalesce(shipping_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number') from '#"[0-9[:space:]+.\-]*#"' for '#')
+                WHEN btrim(coalesce(shipping_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number')) !~ '[0-9]' THEN NULL
+                ELSE substring(btrim(coalesce(shipping_contact ->> 'mobile_phone_number',contact ->> 'mobile_phone_number')) from '#"[0-9[:space:]+.\-]*#"' for '#')
                 END, NULL))::TEXT AS "shipping_address[phone]"
-         , btrim(nullif(regexp_replace(coalesce(shipping_contact -> 'address' ->> 'street_address',contact -> 'address' ->> 'street_address'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a')) AS shipping_address_raw
-         , btrim(nullif(regexp_replace(coalesce(shipping_contact -> 'address' ->> 'locality',contact -> 'address' ->> 'locality'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a')) AS "shipping_address[city]"
+         , nullif(regexp_replace(btrim(coalesce(shipping_contact -> 'address' ->> 'street_address',contact -> 'address' ->> 'street_address')), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a') AS shipping_address_raw
+         , nullif(regexp_replace(btrim(coalesce(shipping_contact -> 'address' ->> 'locality',contact -> 'address' ->> 'locality')), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a') AS "shipping_address[city]"
          , to_char(
             btrim(CASE
-                      WHEN coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code') !~ '^[0-9\.]+$' THEN NULL
-                      WHEN length(coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code')) > 10 THEN NULL
-                      ELSE regexp_replace(coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code'),'[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')
+                      WHEN btrim(coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code')) !~ '^[0-9.]+$' THEN NULL
+                      WHEN length(btrim(coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code'))) > 10 THEN NULL
+                      ELSE regexp_replace(btrim(coalesce(shipping_contact -> 'address' ->> 'postal_code',contact -> 'address' ->> 'postal_code')),'[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g')
                 END)::INT,'fm00000') AS "shipping_address[zip]"
-         , btrim(nullif(regexp_replace(coalesce(shipping_contact -> 'address' ->> 'country',contact -> 'address' ->> 'country'), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a')) AS "shipping_address[country]"
+         , nullif(regexp_replace(btrim(coalesce(shipping_contact -> 'address' ->> 'country',contact -> 'address' ->> 'country')), '[\t\n\r\u00a0\u180e\u2007\u200b-\u200f\u202f\u2060\ufeff]*', '', 'g'), 'n/a') AS "shipping_address[country]"
          , 'not_validated' AS "shipping_address[validation_status]"
          , s.addon_id AS "addons[id][0]"
          , s.item_quantity AS "addons[quantity][0]"
@@ -332,7 +333,7 @@ WITH discounts_in_eur_amount AS (
                        ON ip.shop_contract_id = s.shop_contract_id
                            AND ip.plan_id = s."subscription[plan_id]"
 )
--- SELECT * FROM subscriptions_dates_precalculation WHERE shop_contract_id IN ('V60796615','V39310061') ;
+-- SELECT * FROM subscriptions_dates_precalculation;
    , subscriptions_dates_precalculation_2 AS (
     SELECT
         s2.*
@@ -489,7 +490,7 @@ WITH discounts_in_eur_amount AS (
                                         THEN "contract term end" - INTERVAL '1 year' -- logic for PRORATED ??
                                     WHEN is_3y_plan = TRUE
                                         THEN "contract term end" - INTERVAL '3 years' -- logic for PRORATED ??
-                                END AS "contract_term[contract_start]"
+        END AS "contract_term[contract_start]"
                               , cf_lifetime_licence
                               , "subscription[auto_collection]"
                               , coupon_code_temp
@@ -526,14 +527,22 @@ WITH discounts_in_eur_amount AS (
          , "subscription[plan_quantity]"
          , "subscription[plan_unit_price]"
          , "subscription[status]"
-         , to_char("subscription[start_date]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[start_date]"
-         , to_char("subscription[started_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[started_at]"
-         , to_char("subscription[current_term_start]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start]"
-         , to_char("subscription[current_term_end]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_end]"
-         , to_char("contract term end",'YYYY-MM-DD HH24:MI:SS') AS "contract term end"
-         , to_char("contract_term[contract_start]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[contract_start]"
-         , to_char("contract_term[created_at]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[created_at]"
-         , to_char("subscription[cancelled_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[cancelled_at]"
+         , "subscription[start_date]"
+         , "subscription[started_at]"
+         , "subscription[current_term_start]"
+         , "subscription[current_term_end]"
+         , "contract term end"
+         , least("subscription[started_at]","contract_term[contract_start]") AS "contract_term[contract_start]" --2022-06-23, contract start date cannot not be lesser than the Subscription start date
+         , least("subscription[started_at]","contract_term[created_at]") AS "contract_term[created_at]"
+         , CASE
+               WHEN "subscription[cancelled_at]" > "subscription[started_at]"
+                   AND "subscription[cancelled_at]" <= "contract term end"
+                   THEN "subscription[cancelled_at]"
+               WHEN "subscription[cancelled_at]" <= "subscription[started_at]"
+                   THEN "subscription[started_at]" + INTERVAL '1 minute'
+               WHEN "subscription[cancelled_at]" > "contract term end"
+                   THEN "contract term end"
+        END AS "subscription[cancelled_at]"
          , CASE
                WHEN "subscription[status]" = 'cancelled'
                    THEN NULL
@@ -567,7 +576,6 @@ WITH discounts_in_eur_amount AS (
          , coupon_code_temp
          , cancel_reason_code
          , cf_lifetime_licence
-         , FALSE AS "create_current_term_invoice"
          , "subscription[auto_collection]"
          , "shipping_address[first_name]"
          , "shipping_address[last_name]"
@@ -576,45 +584,89 @@ WITH discounts_in_eur_amount AS (
          , "shipping_address[phone]"
          , "shipping_address[line1]"
          , "shipping_address[line2]"
-         , NULL AS "shipping_address[line3]"
          , "shipping_address[city]"
-         , NULL AS "shipping_address[state_code]"
-         , NULL AS "shipping_address[state]"
          , "shipping_address[zip]"
          , "shipping_address[country]"
          , "shipping_address[validation_status]"
-         , NULL AS total_amount_raised
-         , NULL AS "subscription[setup_fee]"
-         , NULL AS "subscription[trial_start]"
-         , NULL AS "subscription[trial_end]"
-         , NULL AS "subscription[pause_date]"
-         , NULL AS "subscription[resume_date]"
-         , NULL AS "subscription[po_number]"
-         , NULL AS "coupon_ids[1]"
-         , NULL AS "subscription[payment_source_id]"
-         , NULL AS "subscription[invoice_notes]"
-         , NULL AS "subscription[meta_data]"
-         , NULL AS "contract_term[id]"
-         , NULL AS "contract_term[total_amount_raised]"
-         , NULL AS "contract_term[action_at_term_end]"
-         , 28 AS "contract_term[cancellation_cutoff_period]"
-         , NULL AS "transaction[amount]"
-         , NULL AS "transaction[payment_method]"
-         , NULL AS "transaction[reference_number]"
-         , NULL AS "transaction[date]"
-         , NULL AS "subscription[cf_cancelled_devices]"
-         , NULL AS "subscription[cf_total_sent_devices_for_subscription]"
-         , NULL AS "subscription[cf_total_received_devices_for_subscription]"
-         , NULL AS "subscription[cf_currently_held_devices_for_subscription]"
-         , NULL AS "subscription[cf_to_be_returned_devices_for_subscription]"
          , default_billing_cycles
     FROM subscriptions_3
 )
-SELECT * FROM subscriptions_4 WHERE "subscription[plan_id]" NOT LIKE 'hardware%' --and shop_customer_id = 'K41608077'
+   , subscriptions_5 AS (SELECT "customer[email]"
+                              , shop_customer_id
+                              , "subscription[id]"
+                              , "subscription[cf_vertragsnummer]"
+                              , "subscription[plan_id]"
+                              , "subscription[plan_quantity]"
+                              , "subscription[plan_unit_price]"
+                              , CASE
+                                    WHEN "subscription[status]" = 'non_renewing'
+                                        AND billing_cycles >1
+                                        THEN 'active'
+                                    ELSE "subscription[status]"
+        END AS "subscription[status]"
+                              , to_char("subscription[start_date]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[start_date]"
+                              , to_char("subscription[started_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[started_at]"
+                              , to_char("subscription[current_term_start]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start]"
+                              , to_char("subscription[current_term_end]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_end]"
+                              , to_char("contract term end",'YYYY-MM-DD HH24:MI:SS') AS "contract term end"
+                              , to_char("contract_term[contract_start]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[contract_start]"
+                              , to_char("contract_term[created_at]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[created_at]"
+                              , to_char("subscription[cancelled_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[cancelled_at]"
+                              , billing_cycles
+                              , "contract_term[billing_cycle]"
+                              , "subscription[contract_term_billing_cycle_on_renewal]"
+                              , coupon_code_temp
+                              , cancel_reason_code
+                              , cf_lifetime_licence
+                              , FALSE AS "create_current_term_invoice"
+                              , "subscription[auto_collection]"
+                              , "shipping_address[first_name]"
+                              , "shipping_address[last_name]"
+                              , "shipping_address[email]"
+                              , "shipping_address[company]"
+                              , "shipping_address[phone]"
+                              , "shipping_address[line1]"
+                              , "shipping_address[line2]"
+                              , NULL AS "shipping_address[line3]"
+                              , "shipping_address[city]"
+                              , NULL AS "shipping_address[state_code]"
+                              , NULL AS "shipping_address[state]"
+                              , "shipping_address[zip]"
+                              , "shipping_address[country]"
+                              , "shipping_address[validation_status]"
+                              , default_billing_cycles
+                              , NULL AS total_amount_raised
+                              , NULL AS "subscription[setup_fee]"
+                              , NULL AS "subscription[trial_start]"
+                              , NULL AS "subscription[trial_end]"
+                              , NULL AS "subscription[pause_date]"
+                              , NULL AS "subscription[resume_date]"
+                              , NULL AS "subscription[po_number]"
+                              , NULL AS "coupon_ids[1]"
+                              , NULL AS "subscription[payment_source_id]"
+                              , NULL AS "subscription[invoice_notes]"
+                              , NULL AS "subscription[meta_data]"
+                              , NULL AS "contract_term[id]"
+                              , NULL AS "contract_term[total_amount_raised]"
+                              , NULL AS "contract_term[action_at_term_end]"
+                              , 28   AS "contract_term[cancellation_cutoff_period]"
+                              , NULL AS "transaction[amount]"
+                              , NULL AS "transaction[payment_method]"
+                              , NULL AS "transaction[reference_number]"
+                              , NULL AS "transaction[date]"
+                              , NULL AS "subscription[cf_cancelled_devices]"
+                              , NULL AS "subscription[cf_total_sent_devices_for_subscription]"
+                              , NULL AS "subscription[cf_total_received_devices_for_subscription]"
+                              , NULL AS "subscription[cf_currently_held_devices_for_subscription]"
+                              , NULL AS "subscription[cf_to_be_returned_devices_for_subscription]"
+                         FROM subscriptions_4
+)
+SELECT * FROM subscriptions_5 WHERE "subscription[plan_id]" NOT LIKE 'hardware%' --and shop_customer_id = 'K41608077'
 -- As agreed with Anne and CB on 20220110 we stop sending hardware plans for migration, therefore the 2 lines below are obsolete
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_3 WHERE "subscription[plan_id]" LIKE 'hardware%'
 ;
+
 
 
 
