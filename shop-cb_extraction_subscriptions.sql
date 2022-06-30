@@ -48,7 +48,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
---     AND cc.outbound_id = 'K94940437'
+--     AND cc.outbound_id = '79325532'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_invoice_product AS (
@@ -101,7 +101,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
 -- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
---     AND cc.outbound_id = 'K94940437'
+--     AND cc.outbound_id = '79325532'
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
@@ -363,7 +363,7 @@ WITH discounts_in_eur_amount AS (
 -- SELECT * FROM subscriptions_dates_precalculation_2; WHERE shop_contract_id IN ('V60796615','V39310061') ;
    , subscriptions_2 AS (
     SELECT
-        REVERSE(REGEXP_REPLACE(REVERSE("customer[email]"), '\-', '.')) AS "customer[email]"
+        REVERSE(REGEXP_REPLACE(REVERSE("customer[email]"), '-', '.')) AS "customer[email]"
          , shop_customer_id
          , "subscription[id]"
          , shop_contract_id AS "subscription[cf_vertragsnummer]"
@@ -378,12 +378,12 @@ WITH discounts_in_eur_amount AS (
                WHEN "subscription[current_term_end]" + INTERVAL '14 days' < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
-                   AND "subscription[plan_quantity]" < 1
+                   AND "subscription[plan_quantity]"  < 1
                    AND "contract term end" < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
                    AND "subscription[plan_quantity]" < 1
-                   THEN 'non_renewing'
+                   THEN 'cancelled'
                WHEN "subscription[started_at]" > current_date
                    THEN 'future'
                WHEN "subscription[status]" <> 'active'
@@ -411,7 +411,7 @@ WITH discounts_in_eur_amount AS (
          , "coupon_ids[0]" AS coupon_code_temp
          , "shipping_address[first_name]"
          , "shipping_address[last_name]"
-         , REVERSE(REGEXP_REPLACE(REVERSE("shipping_address[email]"), '\-', '.')) AS "shipping_address[email]"
+         , REVERSE(REGEXP_REPLACE(REVERSE("shipping_address[email]"), '-', '.')) AS "shipping_address[email]"
          , "shipping_address[company]"
          , "shipping_address[phone]"
          , CASE
@@ -644,7 +644,7 @@ WITH discounts_in_eur_amount AS (
                                             END::INT) >1
                                         THEN 'active'
                                     ELSE "subscription[status]"
-                                END AS "subscription[status]"
+        END AS "subscription[status]"
                               , to_char("subscription[start_date]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[start_date]"
                               , to_char("subscription[started_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[started_at]"
                               , to_char("subscription[current_term_start_shop]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start_shop]"
@@ -671,7 +671,7 @@ WITH discounts_in_eur_amount AS (
                                     WHEN is_monthly_billing_plan = TRUE
                                         THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE))*12
                                         + EXTRACT(month FROM age("contract term end","subscription[current_term_start]"::DATE)))
-                                END::INT AS billing_cycles -- remaining billing cycles
+        END::INT AS billing_cycles -- remaining billing cycles
                               , "contract_term[billing_cycle]"
                               , "subscription[contract_term_billing_cycle_on_renewal]"
                               , coupon_code_temp
@@ -725,6 +725,7 @@ SELECT * FROM subscriptions_6 WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_6 WHERE "subscription[plan_id]" LIKE 'hardware%'
 ;
+
 
 
 
