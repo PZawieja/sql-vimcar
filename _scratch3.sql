@@ -353,7 +353,7 @@ WITH discounts_in_eur_amount AS (
                         ELSE "subscription[started_at]" + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',"subscription[started_at]") + INTERVAL '1 day'))
                             + extract(month from age(date_trunc('month',current_date), date_trunc('month',"subscription[started_at]") + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
                         END) AS "contract term end"
-            FROM subscriptions_dates_precalculation s2
+    FROM subscriptions_dates_precalculation s2
              LEFT JOIN (SELECT shop_contract_id AS contract_id_from_shop, MIN("subscription[started_at]") AS min_3y_prod_start_date
                         FROM subscriptions_dates_precalculation
                         WHERE "subscription[plan_id]" ILIKE '%3_years%'
@@ -363,7 +363,7 @@ WITH discounts_in_eur_amount AS (
 -- SELECT * FROM subscriptions_dates_precalculation_2; WHERE shop_contract_id IN ('V60796615','V39310061') ;
    , subscriptions_2 AS (
     SELECT
-        REVERSE(REGEXP_REPLACE(REVERSE("customer[email]"), '-', '.')) AS "customer[email]"
+        "customer[email]"
          , shop_customer_id
          , "subscription[id]"
          , shop_contract_id AS "subscription[cf_vertragsnummer]"
@@ -378,17 +378,17 @@ WITH discounts_in_eur_amount AS (
                WHEN "subscription[current_term_end]" + INTERVAL '14 days' < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
-                       AND "subscription[plan_quantity]"  < 1
-                       AND "contract term end" < current_date
+                   AND "subscription[plan_quantity]"  < 1
+                   AND "contract term end" < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
-                       AND "subscription[plan_quantity]" < 1
+                   AND "subscription[plan_quantity]" < 1
                    THEN 'cancelled'
                WHEN "subscription[started_at]" > current_date
                    THEN 'future'
                WHEN "subscription[status]" <> 'active'
-                       AND "subscription[current_term_end]" = "contract term end"   -- meaning there are NO billing cycles left
-                       AND  current_date < "contract term end"                      -- contract end date is in the future
+                   AND "subscription[current_term_end]" = "contract term end"   -- meaning there are NO billing cycles left
+                   AND  current_date < "contract term end"                      -- contract end date is in the future
                    THEN 'non_renewing'
                WHEN "subscription[status]" <> 'active'
                    AND "contract term end" <= current_date
@@ -474,14 +474,14 @@ WITH discounts_in_eur_amount AS (
                                     WHEN "subscription[status]" <> 'active'
                                         OR ("subscription[plan_quantity]" = 0 AND "subscription[status]" = 'active')
                                         THEN coalesce("subscription[current_term_start]","subscription[started_at]" + interval '1 day')
-                                END AS "subscription[cancelled_at]"
+        END AS "subscription[cancelled_at]"
                               , CASE WHEN "subscription[status]" = 'cancelled' THEN cancel_reason_code END AS cancel_reason_code
                               , CASE
                                     WHEN "subscription[status]" = 'cancelled'
                                         THEN "subscription[current_term_end]"
                                     WHEN "subscription[status]" <> 'future'
                                         THEN "contract term end"
-                                END AS "contract term end"
+        END AS "contract term end"
                               , CASE
                                     WHEN "subscription[status]" = 'future'
                                         THEN "subscription[started_at]"
@@ -489,7 +489,7 @@ WITH discounts_in_eur_amount AS (
                                         THEN "contract term end" - INTERVAL '1 year' -- logic for PRORATED ??
                                     WHEN is_3y_plan = TRUE
                                         THEN "contract term end" - INTERVAL '3 years' -- logic for PRORATED ??
-                                END AS "contract_term[contract_start]"
+        END AS "contract_term[contract_start]"
                               , cf_lifetime_licence
                               , "subscription[auto_collection]"
                               , coupon_code_temp
@@ -507,7 +507,7 @@ WITH discounts_in_eur_amount AS (
                               , CASE
                                     WHEN "subscription[status]" IN ('active', 'future')
                                         THEN "subscription[contract_term_billing_cycle_on_renewal]"
-                                END AS "subscription[contract_term_billing_cycle_on_renewal]"
+        END AS "subscription[contract_term_billing_cycle_on_renewal]"
                               , FALSE AS "create_current_term_invoice"
                               , LEAST("subscription[started_at]","contract_term[created_at]") AS "contract_term[created_at]"
                               , is_monthly_billing_plan
@@ -530,34 +530,34 @@ WITH discounts_in_eur_amount AS (
          , "subscription[started_at]"
          , "subscription[current_term_start]" AS "subscription[current_term_start_shop]"
          , CASE
-             WHEN is_monthly_billing_plan = TRUE
-                 THEN "subscription[current_term_end]" - INTERVAL '1 month'
-             ELSE "subscription[current_term_end]" - INTERVAL '1 year'
-            END AS "subscription[current_term_start]"
+               WHEN is_monthly_billing_plan = TRUE
+                   THEN "subscription[current_term_end]" - INTERVAL '1 month'
+               ELSE "subscription[current_term_end]" - INTERVAL '1 year'
+        END AS "subscription[current_term_start]"
          , "subscription[current_term_end]"
          , "contract term end"
          , "contract_term[contract_start]"
          , "contract_term[created_at]"
          , CASE
-                 WHEN "subscription[cancelled_at]" > "subscription[started_at]"
-                        AND "subscription[cancelled_at]" <= "contract term end"
-                    THEN "subscription[cancelled_at]"
-                WHEN "subscription[cancelled_at]" <= "subscription[started_at]"
-                    THEN "subscription[started_at]" + INTERVAL '1 minute'
-                WHEN "subscription[cancelled_at]" > "contract term end"
-                    THEN "contract term end"
-            END AS "subscription[cancelled_at]"
+               WHEN "subscription[cancelled_at]" > "subscription[started_at]"
+                   AND "subscription[cancelled_at]" <= "contract term end"
+                   THEN "subscription[cancelled_at]"
+               WHEN "subscription[cancelled_at]" <= "subscription[started_at]"
+                   THEN "subscription[started_at]" + INTERVAL '1 minute'
+               WHEN "subscription[cancelled_at]" > "contract term end"
+                   THEN "contract term end"
+        END AS "subscription[cancelled_at]"
          , CASE
                WHEN is_3y_plan = TRUE
-                       AND is_monthly_billing_plan = FALSE
-                       AND "subscription[started_at]" + interval '3 years' <= current_date
+                   AND is_monthly_billing_plan = FALSE
+                   AND "subscription[started_at]" + interval '3 years' <= current_date
                    THEN 1
                WHEN is_3y_plan = TRUE
                    AND is_monthly_billing_plan = TRUE
                    AND "subscription[started_at]" + interval '3 years' <= current_date
                    THEN 12
                ELSE default_billing_cycles
-            END AS "contract_term[billing_cycle]" -- billing cycles for this plan
+        END AS "contract_term[billing_cycle]" -- billing cycles for this plan
          , "subscription[contract_term_billing_cycle_on_renewal]"
          , coupon_code_temp
          , cancel_reason_code
@@ -579,46 +579,51 @@ WITH discounts_in_eur_amount AS (
          , is_monthly_billing_plan
     FROM subscriptions_3
 )
-, subscriptions_5 AS (SELECT "customer[email]"
-                           , shop_customer_id
-                           , "subscription[id]"
-                           , "subscription[cf_vertragsnummer]"
-                           , "subscription[plan_id]"
-                           , "subscription[plan_quantity]"
-                           , "subscription[plan_unit_price]"
-                           , "subscription[status]"
-                           , "subscription[start_date]"
-                           , least("subscription[started_at]","contract_term[contract_start]","subscription[current_term_start]") AS "subscription[started_at]"
-                           , "subscription[current_term_start_shop]"
-                           , "subscription[current_term_start]" AS "subscription[current_term_start]"
-                           , "subscription[current_term_end]" AS "subscription[current_term_end]"
-                           , "contract term end" AS "contract term end"
-                           , least("subscription[started_at]","contract_term[contract_start]","subscription[current_term_start]") AS "contract_term[contract_start]" --2022-06-23, contract start date cannot not be lesser than the Subscription start date
-                           , least("subscription[started_at]","contract_term[created_at]","subscription[current_term_start]") AS "contract_term[created_at]"
-                           , "subscription[cancelled_at]"
-                           , "contract_term[billing_cycle]"
-                           , "subscription[contract_term_billing_cycle_on_renewal]"
-                           , coupon_code_temp
-                           , cancel_reason_code
-                           , cf_lifetime_licence
-                           , "subscription[auto_collection]"
-                           , "shipping_address[first_name]"
-                           , "shipping_address[last_name]"
-                           , "shipping_address[email]"
-                           , "shipping_address[company]"
-                           , "shipping_address[phone]"
-                           , "shipping_address[line1]"
-                           , "shipping_address[line2]"
-                           , "shipping_address[city]"
-                           , "shipping_address[zip]"
-                           , "shipping_address[country]"
-                           , "shipping_address[validation_status]"
-                           , default_billing_cycles
-                           , is_3y_plan
-                           , is_monthly_billing_plan
-                      FROM subscriptions_4
+   , subscriptions_5 AS (SELECT "customer[email]"
+                              , shop_customer_id
+                              , "subscription[id]"
+                              , "subscription[cf_vertragsnummer]"
+                              , "subscription[plan_id]"
+                              , "subscription[plan_quantity]"
+                              , "subscription[plan_unit_price]"
+                              , "subscription[status]"
+                              , "subscription[start_date]"
+                              , least("subscription[started_at]","contract_term[contract_start]","subscription[current_term_start]") AS "subscription[started_at]"
+                              , "subscription[current_term_start_shop]"
+                              , "subscription[current_term_start]" AS "subscription[current_term_start]"
+                              , "subscription[current_term_end]" AS "subscription[current_term_end]"
+                              , "contract term end" AS "contract term end"
+                              , least("subscription[started_at]","contract_term[contract_start]","subscription[current_term_start]") AS "contract_term[contract_start]" --2022-06-23, contract start date cannot not be lesser than the Subscription start date
+                              , least("subscription[started_at]","contract_term[created_at]","subscription[current_term_start]") AS "contract_term[created_at]"
+                              , "subscription[cancelled_at]"
+                              , "contract_term[billing_cycle]"
+                              , "subscription[contract_term_billing_cycle_on_renewal]"
+                              , coupon_code_temp
+                              , cancel_reason_code
+                              , cf_lifetime_licence
+                              , "subscription[auto_collection]"
+                              , "shipping_address[first_name]"
+                              , "shipping_address[last_name]"
+                              , "shipping_address[email]"
+                              , "shipping_address[company]"
+                              , "shipping_address[phone]"
+                              , "shipping_address[line1]"
+                              , "shipping_address[line2]"
+                              , "shipping_address[city]"
+                              , "shipping_address[zip]"
+                              , "shipping_address[country]"
+                              , "shipping_address[validation_status]"
+                              , default_billing_cycles
+                              , is_3y_plan
+                              , is_monthly_billing_plan
+                         FROM subscriptions_4
 )
-   , subscriptions_6 AS (SELECT "customer[email]"
+   , subscriptions_6 AS (SELECT
+                             CASE
+                                 WHEN "customer[email]" = 'johannes.horsters@dvag-de'
+                                     THEN 'johannes.horsters@dvag.de'
+                                 ELSE split_part("customer[email]",',',1)
+                                 END AS "customer[email]"
                               , shop_customer_id
                               , "subscription[id]"
                               , "subscription[cf_vertragsnummer]"
@@ -630,21 +635,21 @@ WITH discounts_in_eur_amount AS (
                                         -- check if billing cycles >1
                                         AND (CASE
                                             -- 3y which completed the first 36 months:
-                                                WHEN is_3y_plan = TRUE
-                                                        AND is_monthly_billing_plan = TRUE
-                                                        AND "subscription[started_at]" + interval '3 years' <= current_date
-                                                    THEN 12
-                                             -- 1y and 3y, yearly billing:
-                                                WHEN is_monthly_billing_plan = FALSE
-                                                    THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE)))
-                                             -- 1y and 3y, monthly billing:
-                                                WHEN is_monthly_billing_plan = TRUE
-                                                    THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE))*12
-                                                        + EXTRACT(month FROM age("contract term end","subscription[current_term_start]"::DATE)))
-                                             END::INT) >1
+                                                 WHEN is_3y_plan = TRUE
+                                                     AND is_monthly_billing_plan = TRUE
+                                                     AND "subscription[started_at]" + interval '3 years' <= current_date
+                                                     THEN 12
+                                            -- 1y and 3y, yearly billing:
+                                                 WHEN is_monthly_billing_plan = FALSE
+                                                     THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE)))
+                                            -- 1y and 3y, monthly billing:
+                                                 WHEN is_monthly_billing_plan = TRUE
+                                                     THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE))*12
+                                                     + EXTRACT(month FROM age("contract term end","subscription[current_term_start]"::DATE)))
+                                            END::INT) >1
                                         THEN 'active'
                                     ELSE "subscription[status]"
-                                END AS "subscription[status]"
+        END AS "subscription[status]"
                               , to_char("subscription[start_date]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[start_date]"
                               , to_char("subscription[started_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[started_at]"
                               , to_char("subscription[current_term_start_shop]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start_shop]"
@@ -671,7 +676,7 @@ WITH discounts_in_eur_amount AS (
                                     WHEN is_monthly_billing_plan = TRUE
                                         THEN GREATEST(1, EXTRACT(year FROM age("contract term end","subscription[current_term_start]"::DATE))*12
                                         + EXTRACT(month FROM age("contract term end","subscription[current_term_start]"::DATE)))
-                                END::INT AS billing_cycles -- remaining billing cycles
+        END::INT AS billing_cycles -- remaining billing cycles
                               , "contract_term[billing_cycle]"
                               , "subscription[contract_term_billing_cycle_on_renewal]"
                               , coupon_code_temp

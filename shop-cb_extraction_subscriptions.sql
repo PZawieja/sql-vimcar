@@ -363,7 +363,7 @@ WITH discounts_in_eur_amount AS (
 -- SELECT * FROM subscriptions_dates_precalculation_2; WHERE shop_contract_id IN ('V60796615','V39310061') ;
    , subscriptions_2 AS (
     SELECT
-        REVERSE(REGEXP_REPLACE(REVERSE("customer[email]"), '-', '.')) AS "customer[email]"
+        "customer[email]"
          , shop_customer_id
          , "subscription[id]"
          , shop_contract_id AS "subscription[cf_vertragsnummer]"
@@ -618,7 +618,12 @@ WITH discounts_in_eur_amount AS (
                               , is_monthly_billing_plan
                          FROM subscriptions_4
 )
-   , subscriptions_6 AS (SELECT "customer[email]"
+   , subscriptions_6 AS (SELECT
+                             CASE
+                                 WHEN "customer[email]" = 'johannes.horsters@dvag-de'
+                                     THEN 'johannes.horsters@dvag.de'
+                                 ELSE split_part("customer[email]",',',1)
+                                 END AS "customer[email]"
                               , shop_customer_id
                               , "subscription[id]"
                               , "subscription[cf_vertragsnummer]"
