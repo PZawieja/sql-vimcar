@@ -48,7 +48,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-    AND cc.outbound_id = 'K75208383'
+    AND cc.outbound_id = 'K69029282'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_invoice_product AS (
@@ -101,7 +101,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
 -- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
-    AND cc.outbound_id = 'K75208383'
+    AND cc.outbound_id = 'K69029282'
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
@@ -204,12 +204,12 @@ WITH discounts_in_eur_amount AS (
                    THEN 12
                ELSE 1
         END AS "subscription[contract_term_billing_cycle_on_renewal]"  -- works also for 3 years contracts: https://www.notion.so/vimcar/Migration-Review-Learnings-Decisions-To-Dos-f32758b58cb54d3e8a026b7821d0632f
-         , CASE
-               WHEN rp.payment_method IN ('invoice', 'paypal')
-                   OR rp.payment_method IS NULL
-                   THEN 'off'
-               ELSE 'on'
-        END AS "subscription[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
+--          , CASE
+--                WHEN rp.payment_method IN ('invoice', 'paypal')
+--                    OR rp.payment_method IS NULL
+--                    THEN 'off'
+--                ELSE 'on'
+--         END AS "subscription[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
          , CASE
                WHEN coupon_code IS NOT NULL
                    THEN coupon_code
@@ -407,7 +407,7 @@ WITH discounts_in_eur_amount AS (
          , "contract term end"
          , cancel_reason_code
          , cf_lifetime_licence
-         , "subscription[auto_collection]"
+--          , "subscription[auto_collection]"
          , "coupon_ids[0]" AS coupon_code_temp
          , "shipping_address[first_name]"
          , "shipping_address[last_name]"
@@ -491,7 +491,7 @@ WITH discounts_in_eur_amount AS (
                                         THEN "contract term end" - INTERVAL '3 years' -- logic for PRORATED ??
                             END AS "contract_term[contract_start]"
                               , cf_lifetime_licence
-                              , "subscription[auto_collection]"
+--                               , "subscription[auto_collection]"
                               , coupon_code_temp
                               , "shipping_address[first_name]"
                               , "shipping_address[last_name]"
@@ -558,7 +558,6 @@ WITH discounts_in_eur_amount AS (
          , coupon_code_temp
          , cancel_reason_code
          , cf_lifetime_licence
-         , "subscription[auto_collection]"
          , "shipping_address[first_name]"
          , "shipping_address[last_name]"
          , "shipping_address[email]"
@@ -702,6 +701,7 @@ WITH discounts_in_eur_amount AS (
                    THEN "subscription[contract_term_billing_cycle_on_renewal]"
             END AS "subscription[contract_term_billing_cycle_on_renewal]"
          , default_billing_cycles
+         , is_monthly_billing_plan
     FROM subscriptions_6
        )
 -- SELECT * from subscriptions_7 ;
@@ -717,8 +717,26 @@ SELECT s."customer[email]"
      , CASE WHEN s."subscription[status]" = 'future' THEN least(s."subscription[start_date]", s."subscription[started_at]", s."contract_term[contract_start]") END AS "subscription[start_date]"
      , CASE WHEN s."subscription[status]" <> 'future' THEN least(s."subscription[started_at]", s."contract_term[contract_start]") END AS "subscription[started_at]"
      , s."subscription[current_term_start_shop]"
+     , CASE
+           WHEN s."subscription[status]" = 'active'
+               AND s."subscription[current_term_end]" <= current_date
+            THEN
+               CASE
+                   WHEN s.is_monthly_billing_plan = TRUE
+                       THEN s."subscription[current_term_start]" + INTERVAL '1 month'
+                   WHEN s.is_monthly_billing_plan = FALSE
+                       THEN s."subscription[current_term_start]" + INTERVAL '1 year'
+                END
+        ELSE s."subscription[current_term_start]"
+        END::DATE AS "subscription[current_term_start] TEST"
      , s."subscription[current_term_start]"
      , s."subscription[current_term_end]"
+     , CASE
+         WHEN s."subscription[status]" = 'active'
+             AND s."subscription[current_term_end]" <= current_date
+             THEN TRUE
+        ELSE FALSE
+        END pushed_by_one_billing_cycle
      , s."contract term end"
      , s."contract_term[contract_start]"
      , CASE WHEN s."subscription[status]" = 'active' THEN least(s."contract_term[created_at]", s."subscription[started_at]", s."contract_term[contract_start]") END AS "contract_term[created_at]"
@@ -730,7 +748,6 @@ SELECT s."customer[email]"
      , s4.coupon_code_temp
      , s4.cancel_reason_code
      , s4.cf_lifetime_licence
-     , s4."subscription[auto_collection]"
      , s4."shipping_address[first_name]"
      , s4."shipping_address[last_name]"
      , s4."shipping_address[email]"
@@ -764,20 +781,26 @@ SELECT
      , to_char("subscription[started_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[started_at]"
      , to_char("subscription[current_term_start_shop]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start_shop]"
      , to_char("subscription[current_term_start]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_start]"
+--      , "subscription[current_term_start] TEST"
      , to_char("subscription[current_term_end]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[current_term_end]"
      , to_char("contract term end",'YYYY-MM-DD HH24:MI:SS') AS "contract term end"
      , to_char("contract_term[contract_start]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[contract_start]" --2022-06-23, contract start date cannot not be lesser than the Subscription start date
      , to_char("contract_term[created_at]",'YYYY-MM-DD HH24:MI:SS') AS "contract_term[created_at]"
      , to_char("subscription[cancelled_at]",'YYYY-MM-DD HH24:MI:SS') AS "subscription[cancelled_at]"
-
+     , pushed_by_one_billing_cycle
      , billing_cycles
+--      , CASE
+--          WHEN pushed_by_one_billing_cycle = TRUE
+--              AND billing_cycles >1
+--                 THEN billing_cycles - 1
+--         ELSE billing_cycles
+--         END AS billing_cycles
      , "contract_term[billing_cycle]"
      , "subscription[contract_term_billing_cycle_on_renewal]"
      , coupon_code_temp
      , cancel_reason_code
      , cf_lifetime_licence
      , FALSE AS "create_current_term_invoice"
-     , "subscription[auto_collection]"
      , "shipping_address[first_name]"
      , "shipping_address[last_name]"
      , CASE
@@ -829,3 +852,4 @@ WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_6 WHERE "subscription[plan_id]" LIKE 'hardware%'
 ;
+
