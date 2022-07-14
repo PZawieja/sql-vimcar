@@ -317,7 +317,7 @@ SELECT
            ELSE FALSE
     END product_is_recurring
      , CASE WHEN upm.monthly_payment IS TRUE THEN 'monthly' ELSE 'yearly' END AS product_billing_frequency
-     , CASE WHEN p.product_name LIKE '%3-jährig%' THEN 36 ELSE 12 END AS product_duration_mths
+     , CASE WHEN p.product_name LIKE '%3_jährig%' THEN 36 ELSE 12 END AS product_duration_mths
      , p.product_price_net AS product_price_net
      , 'EUR' AS product_currency_code
 FROM dwh_main.dim_product p

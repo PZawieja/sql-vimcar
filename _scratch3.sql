@@ -48,7 +48,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-    AND cc.outbound_id = 'K69029282'
+--     AND cc.outbound_id = 'K69029282'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
    , cte_invoice_product AS (
@@ -101,7 +101,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
 -- AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
-    AND cc.outbound_id = 'K69029282'
+--     AND cc.outbound_id = 'K69029282'
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
