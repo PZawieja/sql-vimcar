@@ -1,5 +1,4 @@
 -- SHop migration 2022-05-18
-
 WITH price_increase AS (
     SELECT ctr.customer_id
          , MAX((timestamp AT TIME ZONE 'Europe/Berlin'))::DATE AS max_contract_modified_dt_cet
@@ -96,9 +95,9 @@ WITH price_increase AS (
 --         END AS customer_status
          , CASE
                WHEN shop_product_types_ever LIKE '%Logbook B2B%'
+                   OR shop_product_types_ever LIKE '%Pro%'
                    OR shop_product_types_ever LIKE '%Admin%'
                    OR shop_product_types_ever LIKE '%API%'
-                   OR shop_product_types_ever LIKE '%Pro%'
                    OR shop_product_types_ever LIKE '%Geo%'
                    OR shop_product_types_ever LIKE '%Anti Theft%'
                    OR shop_product_types_ever LIKE '%Driver%'
@@ -187,6 +186,64 @@ WITH price_increase AS (
                           'K14042076',
                           'K95826372')
 )
+   , cte_special_batch_g1 AS (
+    SELECT
+        'G1: sample customers who experienced the price increase action' AS batch_definition
+         , customer_id
+         , customer_uuid
+    FROM batch_conditions
+    WHERE customer_id IN ('K48062619', -- B2B
+                          'K86580169', -- B2B
+                          '57232917', -- B2B
+                          'K96877660', -- B2B
+                          'K34790601', -- B2B
+                          'K40873533', -- B2B, had logbook B2C which we replaced by.B2B eventually
+                          'K70078345', -- B2B
+                          'K10607246', -- B2B
+                          'K76788985', -- B2B
+                          'K51696968', -- B2B, interesting case with Pro upgrade
+                          'K55757192',
+                          '77722383',
+                          'K97722414',
+                          'K66158243',
+                          'K82911856',
+                          'K89329176',
+                          '14826200',
+                          'K53535038',
+                          'K93641801',
+                          'K95561653',
+                          'K37940883',
+                          'K74168743',
+                          'K70700674',
+                          'K75638883',
+                          'K41922721',
+                          'K20649237',
+                          'K42279452',
+                          'K54291243',
+                          'K17704987',
+                          '27788179',
+                          'K56793645',
+                          '74228249',
+                          '94620003',
+                          'K73649445',
+                          'K43772983',
+                          'K92631283',
+                          '76892354',
+                          'K83609083',
+                          'K99296264',
+                          '13370479',
+                          'K79080031',
+                          'K74898205',
+                          'K44633393',
+                          'K20942585',
+                          '45680946',
+                          'K77422498',
+                          'K63915570',
+                          'K46503723',
+                          'K29871803',
+                          '46264448')
+)
+--    SELECT * FROM cte_special_batch_g1;
    , migration_customers AS (
     SELECT * FROM cte_special_batch_f1
     UNION ALL
@@ -201,6 +258,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -215,6 +273,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -229,6 +288,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -243,6 +303,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -257,6 +318,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -271,6 +333,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -285,6 +348,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -299,6 +363,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -313,6 +378,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -327,6 +393,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -341,6 +408,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -355,6 +423,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -369,6 +438,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -383,6 +453,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -397,6 +468,7 @@ WITH price_increase AS (
       AND has_discount = FALSE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -411,6 +483,7 @@ WITH price_increase AS (
       AND has_discount = TRUE
       AND has_lifetime_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 ------ Active 3 years:
@@ -425,6 +498,7 @@ WITH price_increase AS (
       AND number_of_plans_ever = 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -439,6 +513,7 @@ WITH price_increase AS (
       AND number_of_plans_ever = 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -453,6 +528,7 @@ WITH price_increase AS (
       AND number_of_plans_ever = 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -467,6 +543,7 @@ WITH price_increase AS (
       AND number_of_plans_ever > 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -481,6 +558,7 @@ WITH price_increase AS (
       AND number_of_plans_ever > 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -495,6 +573,7 @@ WITH price_increase AS (
       AND number_of_plans_ever > 1
       AND has_3y_product = TRUE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -510,6 +589,7 @@ WITH price_increase AS (
       AND has_3y_product = FALSE
 --       AND customer_type = 'B2C'
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
 
     UNION ALL
@@ -526,6 +606,7 @@ WITH price_increase AS (
       AND has_3y_product = FALSE
 --       AND customer_type = 'B2C'
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -541,6 +622,7 @@ WITH price_increase AS (
       AND has_3y_product = FALSE
 --       AND customer_type = 'B2C'
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -555,6 +637,7 @@ WITH price_increase AS (
       AND payment_method = 'Adyen (CC or SEPA)'
       AND has_3y_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
 
     UNION ALL
@@ -570,6 +653,7 @@ WITH price_increase AS (
       AND payment_method = 'Invoice or Paypal'
       AND has_3y_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 
     UNION ALL
 
@@ -584,6 +668,7 @@ WITH price_increase AS (
       AND payment_method = 'unknown'
       AND has_3y_product = FALSE
       AND NOT exists(SELECT 1 FROM cte_special_batch_f1 WHERE batch_conditions.customer_uuid = cte_special_batch_f1.customer_uuid)
+      AND NOT exists(SELECT 1 FROM cte_special_batch_g1 WHERE batch_conditions.customer_uuid = cte_special_batch_g1.customer_uuid)
 )
    , customer_contract AS (SELECT mc.customer_id
                                 , mc.customer_uuid
@@ -606,26 +691,25 @@ WITH price_increase AS (
                 WHEN customer_id = 'K30846175' THEN 'Renewal on 2022-02-21, discount:no, 1 logbook'
             END AS comment
      FROM customer_contract
-     WHERE customer_id IN ('86915228','K12747073','K99986918','K30846175')
---      WHERE FALSE --2022-03-14 this time we don't send any sample test customers
+--           WHERE customer_id IN ('86915228','K12747073','K99986918','K30846175')
+     WHERE FALSE --2022-05-16 this time we don't send any sample test customers
     )
 --CHECKS:
 -- SELECT customer_id, count(DISTINCT batch_definition), string_agg(batch_definition,' | ') FROM migration_customers GROUP BY 1 HAVING count(DISTINCT batch_definition) >1; -- check if any customer falls into more than one batch definition
 -- SELECT count(DISTINCT customer_uuid) FROM migration_customers
-SELECT batch_definition, count(DISTINCT customer_id) FROM migration_customers GROUP BY 1 ;
+-- SELECT batch_definition, count(DISTINCT customer_id) FROM migration_customers GROUP BY 1 ;
 -- SELECT count(DISTINCT customer_uuid) FROM migration_customers
 -- SELECT * FROM must_checks_before_migration  -- customer_contract
    , cte_final AS (
-    SELECT * , NULL AS comment FROM customer_contract cc WHERE batch_definition LIKE 'F%' AND NOT EXISTS(SELECT 1 FROM sample_batch sb WHERE cc.customer_uuid = sb.customer_uuid)
-
+--     SELECT * , NULL AS comment FROM customer_contract cc WHERE NOT EXISTS(SELECT 1 FROM sample_batch sb WHERE cc.customer_uuid = sb.customer_uuid) AND batch_definition LIKE 'G%'
+        SELECT * , NULL AS comment FROM customer_contract cc WHERE batch_definition LIKE 'G%'
+    UNION ALL
+    SELECT * FROM sample_batch
 )
--- SELECT * FROM cte_final ORDER BY contract_uuid;
-
+SELECT * FROM cte_final ORDER BY contract_uuid;
+/*
 SELECT batch_definition, count(DISTINCT customer_id) FROM migration_customers GROUP BY 1
 UNION ALL
 SELECT batch_definition, count(DISTINCT customer_id) FROM sample_batch GROUP BY 1
+*/
 
--- SELECT count(DISTINCT customer_id) FROM migration_customers
--- SELECT customer_id, count(DISTINCT batch_definition), string_agg(batch_definition,' | ') FROM migration_customers GROUP BY 1 HAVING count(DISTINCT batch_definition) >1
-
-;

@@ -1,4 +1,8 @@
--- sub_contracts SOLUTION FOR DATES 2022-06-30
+SELECT * FROM shop_extraction_order_invoice WHERE contract_outbound_id = 'V10155631';
+SELECT * FROM mapping.umd_product_map WHERE product_uuid = '0a2205e9-0f1d-4597-ae49-ae445d356858';
+SELECT * FROM shop_extraction_cb_plan_id_map WHERE cb_plan_id = 'fleet-pro-logbook-upgrade_monthly-eur'
+
+-- sub_contracts SOLUTION FOR DATES 2022-07-18
 WITH discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
         contract_outbound_id
@@ -25,7 +29,8 @@ WITH discounts_in_eur_amount AS (
    , cte_contract_product AS (
     SELECT
         cco.outbound_id::VARCHAR(9) AS shop_contract_id
-         , cbmap.cb_plan_id AS plan_id
+         , pmap.product_uuid
+         , pmap.cb_plan_id_unified_map AS plan_id
          , cbmap.cb_plan_id_map
          , cbmap.cb_plan_id_map_nbr
          , pmap.cb_addon_id
@@ -48,14 +53,14 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-          AND cc.outbound_id = 'K77776393'
-    GROUP BY cco.outbound_id::VARCHAR(9), cbmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
+--       AND cc.outbound_id = 'K51696968'
+    GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment, pmap.product_uuid
 )
 -- SELECT * FROM cte_contract_product;
    , cte_invoice_product AS (
     SELECT
         ci.contract_outbound_id::VARCHAR(9) AS shop_contract_id
-         , cbmap.cb_plan_id AS plan_id
+         , pmap.cb_plan_id_unified_map AS plan_id
          , cbmap.cb_plan_id_map
          , cbmap.cb_plan_id_map_nbr
          , pmap.cb_addon_id
@@ -101,9 +106,11 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
-AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
-          --AND cc.outbound_id = 'K69029282'
-    GROUP BY ci.contract_outbound_id, cbmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
+--       AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
+--       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
+--       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
+--       AND cc.outbound_id = 'K51696968' -- good for price increase
+    GROUP BY ci.contract_outbound_id, pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
    , cte_inv_ctr_prod AS (
@@ -154,7 +161,7 @@ AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INC
          , SUM(item_quantity) AS item_quantity
     FROM cte_inv_ctr_prod
     GROUP BY shop_contract_id, shop_contract_id, cb_plan_id_map_nbr, plan_id, cb_addon_id, cb_addon_price_net)
--- SELECT * FROM unique_subscriptions; WHERE shop_contract_id = 'V67879223';
+-- SELECT * FROM unique_subscriptions;
    , subscriptions_1 AS (
     SELECT
         s.shop_contract_id
@@ -183,17 +190,17 @@ AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INC
          , ip.min_provisioning_start
          , ip.max_provisioning_start
          , ip.max_provisioning_end
-         , GREATEST(c.provisioning_period_end AT TIME ZONE 'Europe/Berlin',
-                    CASE
-                        WHEN s.plan_id ILIKE '%3_years%'
-                            THEN c.started + INTERVAL '3 years'
-                        WHEN s.monthly_payment = FALSE
-                            OR c.status = 'terminated'
-                            OR (c.status = 'canceled' AND c.provisioning_period_end + INTERVAL '3 months' < current_date)
-                            THEN c.provisioning_period_end
-                        ELSE c.started + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))
-                            + extract(month from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
-                        END AT TIME ZONE 'Europe/Berlin')::DATE AS "tmp_contract_term_end"
+--          , GREATEST(c.provisioning_period_end AT TIME ZONE 'Europe/Berlin',
+--                     CASE
+--                         WHEN s.plan_id ILIKE '%3_years%'
+--                             THEN c.started + INTERVAL '3 years'
+--                         WHEN s.monthly_payment = FALSE
+--                             OR c.status = 'terminated'
+--                             OR (c.status = 'canceled' AND c.provisioning_period_end + INTERVAL '3 months' < current_date)
+--                             THEN c.provisioning_period_end
+--                         ELSE c.started + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))
+--                             + extract(month from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
+--                         END AT TIME ZONE 'Europe/Berlin')::DATE AS "tmp_contract_term_end"
          , (c.canceled AT TIME ZONE 'Europe/Berlin')::DATE AS "subscription[cancelled_at]"
          , c.cancelation_reason AS cancel_reason_code
          , CASE
@@ -205,12 +212,6 @@ AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INC
                    THEN 12
                ELSE 1
         END AS "subscription[contract_term_billing_cycle_on_renewal]"  -- works also for 3 years contracts: https://www.notion.so/vimcar/Migration-Review-Learnings-Decisions-To-Dos-f32758b58cb54d3e8a026b7821d0632f
---          , CASE
---                WHEN rp.payment_method IN ('invoice', 'paypal')
---                    OR rp.payment_method IS NULL
---                    THEN 'off'
---                ELSE 'on'
---         END AS "subscription[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
          , CASE
                WHEN coupon_code IS NOT NULL
                    THEN coupon_code
@@ -852,70 +853,4 @@ WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 -- As agreed with Anne and CB on 20220110 we stop sending hardware plans for migration, therefore the 2 lines below are obsolete
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_6 WHERE "subscription[plan_id]" LIKE 'hardware%'
-;
-
-
-
-WITH invoice_payment AS (
-    SELECT DISTINCT
-        ci.outbound_id AS shop_invoice_id
-    FROM public.shop_extraction_order_invoice ci
-             JOIN public.customer c
-                  ON c.id = ci.customer_id
-             JOIN public.shop_extraction_current_batch b  -- join batch table
-                  ON c.outbound_id = b.customer_id
-                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
-             JOIN contract cctr
-                  ON cctr.domain = ci.domain
-             LEFT JOIN public.payment p
-                       ON p.invoice_id = ci.id
-             LEFT JOIN (SELECT
-                            invoice_id
-                             , status AS recent_payments_status
-                        FROM (SELECT invoice_id
-                                   , row_number() OVER (PARTITION BY invoice_id ORDER BY authorized, modified DESC) AS row_nbr
-                                   , status
-                              FROM public.payment
-                              WHERE refund_id IS NULL) recent_payments
-                        WHERE row_nbr = 1) rp
-                       ON rp.invoice_id = ci.id
-    WHERE c.contact ->> 'email' NOT LIKE '%vimcar.com'
--- exclude ghost invoices
-      AND coalesce(cctr.cancelation_reason,'dummy') <> 'ghost contract'
--- AND ci.outbound_id IN ('R10205280', 'R10376700')
--- AND ci.contract_outbound_id IN ('V72047034')
-)
-   , invoice_line AS (
-    SELECT
---            contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
-                contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map_nbr::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
-         , ci.created AS invoice_ts
-         , ci.outbound_id ||'_'|| coalesce(pmap.cb_plan_id, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[id]"
-         , ci.outbound_id AS shop_invoice_id
-         , items_added.item_quantity AS "line_items[quantity]"
-         , MAX(ci.created) OVER (PARTITION BY contract_outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END)) AS last_invoice_per_subscription
-    FROM public.shop_extraction_order_invoice ci
-             JOIN public.customer cc
-                  ON cc.id = ci.customer_id
-             JOIN public.order co
-                  ON co.id = ci.order_id
-             JOIN public.shop_extraction_current_batch b  -- join batch table
-                  ON cc.outbound_id = b.customer_id
-                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
-       , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
-                      (obj.value ->> 'quantity')::SMALLINT AS item_quantity
-                  FROM jsonb_array_elements(ci.items_added) obj(value)) items_added
-             JOIN mapping.umd_product_map pmap
-                  ON pmap.product_uuid = CASE items_added.product_id WHEN 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END::UUID
-             LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
-                       ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
-)
-SELECT
-    "invoice[subscription_id]"
-     , SUM("line_items[quantity]") AS quantity_last_invoice
-FROM invoice_line il
-         JOIN invoice_payment ip
-              ON il.shop_invoice_id = ip.shop_invoice_id
-WHERE invoice_ts = last_invoice_per_subscription
-GROUP BY "invoice[subscription_id]"
 ;

@@ -1,4 +1,4 @@
--- sub_contracts SOLUTION FOR DATES 2022-06-30
+-- sub_contracts SOLUTION FOR DATES 2022-07-18
 WITH discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
         contract_outbound_id
@@ -25,7 +25,7 @@ WITH discounts_in_eur_amount AS (
    , cte_contract_product AS (
     SELECT
         cco.outbound_id::VARCHAR(9) AS shop_contract_id
-         , cbmap.cb_plan_id AS plan_id
+         , pmap.cb_plan_id_unified_map AS plan_id
          , cbmap.cb_plan_id_map
          , cbmap.cb_plan_id_map_nbr
          , pmap.cb_addon_id
@@ -48,14 +48,14 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-      AND cc.outbound_id = 'K77776393'
-    GROUP BY cco.outbound_id::VARCHAR(9), cbmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
+      AND cc.outbound_id = '57232917'
+    GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 -- SELECT * FROM cte_contract_product;
    , cte_invoice_product AS (
     SELECT
         ci.contract_outbound_id::VARCHAR(9) AS shop_contract_id
-         , cbmap.cb_plan_id AS plan_id
+         , pmap.cb_plan_id_unified_map AS plan_id
          , cbmap.cb_plan_id_map
          , cbmap.cb_plan_id_map_nbr
          , pmap.cb_addon_id
@@ -101,9 +101,11 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
 --       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
 --     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
-      AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
-      --AND cc.outbound_id = 'K69029282'
-    GROUP BY ci.contract_outbound_id, cbmap.cb_plan_id, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
+--       AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
+--       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
+--       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
+      AND cc.outbound_id = '57232917' -- good for price increase
+    GROUP BY ci.contract_outbound_id, pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
    , cte_inv_ctr_prod AS (
@@ -154,7 +156,7 @@ WITH discounts_in_eur_amount AS (
          , SUM(item_quantity) AS item_quantity
     FROM cte_inv_ctr_prod
     GROUP BY shop_contract_id, shop_contract_id, cb_plan_id_map_nbr, plan_id, cb_addon_id, cb_addon_price_net)
--- SELECT * FROM unique_subscriptions; WHERE shop_contract_id = 'V67879223';
+-- SELECT * FROM unique_subscriptions;
    , subscriptions_1 AS (
     SELECT
         s.shop_contract_id
@@ -183,17 +185,17 @@ WITH discounts_in_eur_amount AS (
          , ip.min_provisioning_start
          , ip.max_provisioning_start
          , ip.max_provisioning_end
-         , GREATEST(c.provisioning_period_end AT TIME ZONE 'Europe/Berlin',
-                    CASE
-                        WHEN s.plan_id ILIKE '%3_years%'
-                            THEN c.started + INTERVAL '3 years'
-                        WHEN s.monthly_payment = FALSE
-                            OR c.status = 'terminated'
-                            OR (c.status = 'canceled' AND c.provisioning_period_end + INTERVAL '3 months' < current_date)
-                            THEN c.provisioning_period_end
-                        ELSE c.started + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))
-                            + extract(month from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
-                        END AT TIME ZONE 'Europe/Berlin')::DATE AS "tmp_contract_term_end"
+--          , GREATEST(c.provisioning_period_end AT TIME ZONE 'Europe/Berlin',
+--                     CASE
+--                         WHEN s.plan_id ILIKE '%3_years%'
+--                             THEN c.started + INTERVAL '3 years'
+--                         WHEN s.monthly_payment = FALSE
+--                             OR c.status = 'terminated'
+--                             OR (c.status = 'canceled' AND c.provisioning_period_end + INTERVAL '3 months' < current_date)
+--                             THEN c.provisioning_period_end
+--                         ELSE c.started + ((extract(year from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))
+--                             + extract(month from age(date_trunc('month',current_date), date_trunc('month',c.started) + INTERVAL '1 day'))::INT / 12) + 1)  * INTERVAL '1 year'
+--                         END AT TIME ZONE 'Europe/Berlin')::DATE AS "tmp_contract_term_end"
          , (c.canceled AT TIME ZONE 'Europe/Berlin')::DATE AS "subscription[cancelled_at]"
          , c.cancelation_reason AS cancel_reason_code
          , CASE
@@ -205,12 +207,6 @@ WITH discounts_in_eur_amount AS (
                    THEN 12
                ELSE 1
         END AS "subscription[contract_term_billing_cycle_on_renewal]"  -- works also for 3 years contracts: https://www.notion.so/vimcar/Migration-Review-Learnings-Decisions-To-Dos-f32758b58cb54d3e8a026b7821d0632f
---          , CASE
---                WHEN rp.payment_method IN ('invoice', 'paypal')
---                    OR rp.payment_method IS NULL
---                    THEN 'off'
---                ELSE 'on'
---         END AS "subscription[auto_collection]"  --on when recurring payment method, off when payment by wire transfer
          , CASE
                WHEN coupon_code IS NOT NULL
                    THEN coupon_code
@@ -856,6 +852,7 @@ WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 
 
 
+
 WITH invoice_payment AS (
     SELECT DISTINCT
         ci.outbound_id AS shop_invoice_id
@@ -888,9 +885,9 @@ WITH invoice_payment AS (
    , invoice_line AS (
     SELECT
 --            contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
-                contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map_nbr::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
+                contract_outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
          , ci.created AS invoice_ts
-         , ci.outbound_id ||'_'|| coalesce(pmap.cb_plan_id, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[id]"
+         , ci.outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[id]"
          , ci.outbound_id AS shop_invoice_id
          , items_added.item_quantity AS "line_items[quantity]"
          , MAX(ci.created) OVER (PARTITION BY contract_outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END)) AS last_invoice_per_subscription
