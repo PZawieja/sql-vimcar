@@ -36,9 +36,9 @@ WITH discounts_in_eur_amount AS (
     FROM public.contract cco
              JOIN public.customer cc
                   ON cc.id = cco.customer_id
---              JOIN public.shop_extraction_current_batch b  -- join batch table
---                   ON cc.outbound_id = b.customer_id
---                       AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
+             JOIN public.shop_extraction_current_batch b  -- join batch table
+                  ON cc.outbound_id = b.customer_id
+                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
        , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
                       (obj.value -> 'price' -> 'net' ->> 'amount')::INT AS item_net_unit_price_amount,
                       (obj.value ->> 'quantity')::SMALLINT AS item_quantity
@@ -48,7 +48,7 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-      AND cc.outbound_id = '57232917'
+          --     AND cc.outbound_id = 'K40873533'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 -- SELECT * FROM cte_contract_product;
@@ -68,13 +68,13 @@ WITH discounts_in_eur_amount AS (
     FROM public.shop_extraction_order_invoice ci
              JOIN public.customer cc
                   ON cc.id = ci.customer_id
---              JOIN public.shop_extraction_current_batch b  -- join batch table
---                   ON cc.outbound_id = b.customer_id
---                       AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
---              JOIN (SELECT DISTINCT customer_id
---                    FROM public.shop_extraction_batch
---                    WHERE coalesce(comment,'dummy') <> 'Not sent for migration - multiple customers with the same email address.') b2  -- excluding the problematic customer from the batch
---                   ON b2.customer_id = cc.outbound_id
+             JOIN public.shop_extraction_current_batch b  -- join batch table
+                  ON cc.outbound_id = b.customer_id
+                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
+             JOIN (SELECT DISTINCT customer_id
+                   FROM public.shop_extraction_batch
+                   WHERE coalesce(comment,'dummy') <> 'Not sent for migration - multiple customers with the same email address.') b2  -- excluding the problematic customer from the batch
+                  ON b2.customer_id = cc.outbound_id
        , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
                       (obj.value -> 'price' -> 'net' ->> 'amount')::INT AS item_net_unit_price_amount
                   FROM jsonb_array_elements(ci.items_added) obj(value)) items_added
@@ -104,7 +104,7 @@ WITH discounts_in_eur_amount AS (
 --       AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
 --       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
 --       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
-      AND cc.outbound_id = '57232917' -- good for price increase
+--      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
@@ -885,12 +885,12 @@ WITH invoice_payment AS (
    , invoice_line AS (
     SELECT
 --            contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
-                contract_outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
+                contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map_nbr::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[subscription_id]"
          , ci.created AS invoice_ts
          , ci.outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END) AS "invoice[id]"
          , ci.outbound_id AS shop_invoice_id
          , items_added.item_quantity AS "line_items[quantity]"
-         , MAX(ci.created) OVER (PARTITION BY contract_outbound_id ||'_'|| coalesce(pmap.cb_plan_id_unified_map, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END)) AS last_invoice_per_subscription
+         , MAX(ci.created) OVER (PARTITION BY contract_outbound_id ||'_'|| coalesce(cbmap.cb_plan_id_map_nbr::TEXT, CASE WHEN items_added.product_id = 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END)) AS last_invoice_per_subscription
     FROM public.shop_extraction_order_invoice ci
              JOIN public.customer cc
                   ON cc.id = ci.customer_id
@@ -906,6 +906,7 @@ WITH invoice_payment AS (
                   ON pmap.product_uuid = CASE items_added.product_id WHEN 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END::UUID
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
+--        WHERE contract_outbound_id = 'V49952975'
 )
 SELECT
     "invoice[subscription_id]"

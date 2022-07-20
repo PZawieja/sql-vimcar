@@ -1,4 +1,4 @@
--- SHop migration 2022-05-18
+-- Shop migration 2022-07-19
 WITH price_increase AS (
     SELECT ctr.customer_id
          , MAX((timestamp AT TIME ZONE 'Europe/Berlin'))::DATE AS max_contract_modified_dt_cet
@@ -80,8 +80,10 @@ WITH price_increase AS (
                   ON pmap.product_uuid = CASE items_added.product_id WHEN 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items_added.product_id END::UUID
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON cbmap.cb_plan_id = pmap.cb_plan_id
+--     WHERE cc.outbound_id = 'K48855744'
     GROUP BY cc.outbound_id, cc.id, ctr.customer_status, rp.payment_method, m.customer_id
 )
+--    SELECT * FROM customer_status_product;
    , batch_conditions AS (
     SELECT
         customer_id
@@ -132,8 +134,9 @@ WITH price_increase AS (
         END AS price_increase_update_risk
          , customer_is_migrated
     FROM customer_status_product
+       WHERE customer_is_migrated = FALSE
 )
--- SELECT * FROM batch_conditions
+-- SELECT * FROM batch_conditions;
 --    SELECT * FROM batch_conditions WHERE price_increase_update_risk = TRUE;
 -- SELECT * FROM batch_conditions WHERE has_product_with_old_price = FALSE AND customer_is_migrated = FALSE and date_trunc('year',min_provisioning_start_ts_cet) = '2019-01-01 00:00:00.000000 +00:00';
 -- SELECT date_trunc('year',min_provisioning_start_ts_cet), count(*) FROM batch_conditions WHERE has_product_with_old_price = FALSE AND customer_is_migrated = FALSE GROUP BY 1;
@@ -144,7 +147,7 @@ WITH price_increase AS (
          , customer_uuid
     FROM batch_conditions
     WHERE (has_product_with_old_price = FALSE
-        AND customer_is_migrated = FALSE
+--         AND customer_is_migrated = FALSE
         AND min_provisioning_start_ts_cet >= '2021-01-01')
        OR customer_id IN ('97832597',
                           '33950110',
@@ -243,10 +246,13 @@ WITH price_increase AS (
                           'K29871803',
                           '46264448')
 )
---    SELECT * FROM cte_special_batch_g1;
+--    SELECT * FROM cte_special_batch_f1;
    , migration_customers AS (
     SELECT * FROM cte_special_batch_f1
     UNION ALL
+    SELECT * FROM cte_special_batch_g1
+    UNION ALL
+
     SELECT
         'A1: status:terminated, plans:1, discounts:no, payment_method:no_restrictions, lifetime_product:no' AS batch_definition
          , customer_id
@@ -701,15 +707,26 @@ WITH price_increase AS (
 -- SELECT count(DISTINCT customer_uuid) FROM migration_customers
 -- SELECT * FROM must_checks_before_migration  -- customer_contract
    , cte_final AS (
---     SELECT * , NULL AS comment FROM customer_contract cc WHERE NOT EXISTS(SELECT 1 FROM sample_batch sb WHERE cc.customer_uuid = sb.customer_uuid) AND batch_definition LIKE 'G%'
-        SELECT * , NULL AS comment FROM customer_contract cc WHERE batch_definition LIKE 'G%'
+    SELECT * , NULL AS comment FROM customer_contract cc WHERE NOT EXISTS(SELECT 1 FROM sample_batch sb WHERE cc.customer_uuid = sb.customer_uuid) -- AND batch_definition LIKE 'G%'
     UNION ALL
     SELECT * FROM sample_batch
 )
-SELECT * FROM cte_final ORDER BY contract_uuid;
-/*
+-- SELECT * FROM cte_final ORDER BY contract_uuid;
+
 SELECT batch_definition, count(DISTINCT customer_id) FROM migration_customers GROUP BY 1
 UNION ALL
 SELECT batch_definition, count(DISTINCT customer_id) FROM sample_batch GROUP BY 1
-*/
+
+-- SELECT count(DISTINCT customer_id) FROM migration_customers
+-- SELECT customer_id, count(DISTINCT batch_definition), string_agg(batch_definition,' | ') FROM migration_customers GROUP BY 1 HAVING count(DISTINCT batch_definition) >1
+
+;--
+SELECT * FROM shop_extraction_batch WHERE batch_definition LIKE 'G%'
+
+SELECT batch_definition, count(DISTINCT customer_uuid) FROM shop_extraction_batch WHERE set_is_migrated IS TRUE  GROUP BY 1 ORDER BY 1;
+
+UPDATE shop_extraction_batch SET batch_definition = 'E3: status:active, plans:1, discounts:no_restrictions, payment_method:unknown, lifetime_product:no_restrictions, 3-years_product:true'
+WHERE batch_definition = 'E: status:active, plans:1, discounts:no_restrictions, payment_method:unknown, lifetime_product:no_restrictions, 3-years_product:true'
+
+
 
