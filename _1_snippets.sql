@@ -542,6 +542,29 @@ WHERE 1=1
 -- AND s.domain_name is null
 ;
 
-
+-- User email, current MRR and items:
+WITH cte_main_domain_items AS (
+    SELECT DISTINCT
+        main_domain_foxbox
+                  , md_items_logbook_fleet + md_items_logbook_non_fleet AS items_logbook
+                  , md_items_admin AS items_admin
+                  , md_items_geo AS items_geo
+                  , md_items_pro AS items_pro
+    FROM dwh_main.tmp_main_domain_info
+)
+SELECT
+    p.email
+     , main_domain_name
+     , coalesce(m.mrr_eur, 0) AS mrr_eur
+     , i.items_logbook
+     , i.items_admin
+     , i.items_geo
+     , i.items_pro
+FROM dwh_main.dim_principal p
+         LEFT JOIN dwh_main.dim_main_domain_info m
+                   ON m.foxbox_main_domain = p.main_domain_name
+         LEFT JOIN cte_main_domain_items i
+                   ON i.main_domain_foxbox = p.main_domain_name
+WHERE email IN ('till.kueken@grenzlaeufer-ev.de')
 
 

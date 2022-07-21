@@ -1,5 +1,40 @@
 -- sub_contracts SOLUTION FOR DATES 2022-07-18
-WITH discounts_in_eur_amount AS (
+WITH cte_customer AS (
+    SELECT cc.*
+    FROM customer cc
+             JOIN public.shop_extraction_current_batch b  -- join batch table
+                  ON cc.outbound_id = b.customer_id
+                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
+             JOIN (SELECT DISTINCT customer_id
+                   FROM public.shop_extraction_batch
+                   WHERE coalesce(comment,'dummy') <> 'Not sent for migration - multiple customers with the same email address.') b2  -- excluding the problematic customer from the batch
+                  ON b2.customer_id = cc.outbound_id
+    WHERE TRUE
+    --                       AND cc.outbound_id = 'K10711749'  -- monthly billing cycles (good for testing)
+--                       AND cc.outbound_id = 'K65597398' -- annual billing cycles (good for testing)
+--                         AND cc.outbound_id = 'K45828570' -- annual billing cycles, 3-years contract (good for testing)
+--                         AND cc.outbound_id = 'K67710870' -- there is no cancellation date for contract V74285730, must be populated in SQL
+--                         and cc.outbound_id = 'K91452842' -- there is a discount 10% ot the contract level but coupon is missing, dummy must be created
+--                             AND cc.outbound_id = '72006772' -- the calculated contract term end date should be 17 Nov'21
+--       AND cc.outbound_id = 'K78533247' -- customer has 1 product only and had a price increase in January 2022
+--       and cc.outbound_id = 'K91544902' -- this one has 2 the same products invoices, therefore must have item_quantity = 2 (and not 1 as it was before 2022-05-05
+--       AND cc.outbound_id = 'K91789534' -- customer has multiple products, 2 of them will get a price increase on 16 April'22
+--     AND cc.outbound_id = 'K48177636' -- 3y contract, monthly billing, started in Oct'2019
+--     AND cc.outbound_id = '79325532'-- 1y contract, yearly billing, started in 2017, PRICE INCREASE!
+--       AND cc.outbound_id = 'K17650370'-- 1y contract, yearly billing, started in 2021, no price increase, PRORATED
+--     AND cc.outbound_id = 'K24405027' -- 1y, monthly billing Geo, no price increase, started in Jan'2020
+--       AND cc.outbound_id = 'K17109555' -- 3y contract, monthly billing, started in Oct'2021, multiple products, not prorated
+--     AND cc.outbound_id = 'K41608077' -- prorated, multiple items (SLACK https://vimcar.slack.com/archives/C03FZHZ16MP/p1655296704949729)
+--       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
+--       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
+--     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
+--       AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
+--       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
+--       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
+--      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
+-- AND cc.outbound_id = 'K10607246'
+)
+   , discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
         contract_outbound_id
                                             , CASE
@@ -34,11 +69,8 @@ WITH discounts_in_eur_amount AS (
          , MAX(item_net_unit_price_amount) AS unit_price_net
          , SUM(item_quantity) AS item_quantity
     FROM public.contract cco
-             JOIN public.customer cc
+             JOIN cte_customer cc
                   ON cc.id = cco.customer_id
-             JOIN public.shop_extraction_current_batch b  -- join batch table
-                  ON cc.outbound_id = b.customer_id
-                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
        , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
                       (obj.value -> 'price' -> 'net' ->> 'amount')::INT AS item_net_unit_price_amount,
                       (obj.value ->> 'quantity')::SMALLINT AS item_quantity
@@ -48,7 +80,6 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
-          --     AND cc.outbound_id = 'K40873533'
     GROUP BY cco.outbound_id::VARCHAR(9), pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 -- SELECT * FROM cte_contract_product;
@@ -66,15 +97,8 @@ WITH discounts_in_eur_amount AS (
          , MAX(ci.provisioning_start AT TIME ZONE 'Europe/Berlin')::DATE AS max_provisioning_start
          , MAX(ci.provisioning_end AT TIME ZONE 'Europe/Berlin')::DATE AS max_provisioning_end
     FROM public.shop_extraction_order_invoice ci
-             JOIN public.customer cc
+             JOIN cte_customer cc
                   ON cc.id = ci.customer_id
-             JOIN public.shop_extraction_current_batch b  -- join batch table
-                  ON cc.outbound_id = b.customer_id
-                      AND coalesce(b.comment,'dummy') NOT IN ('Excluded from migration: Ghost customer or internal Vimcar email address.')
-             JOIN (SELECT DISTINCT customer_id
-                   FROM public.shop_extraction_batch
-                   WHERE coalesce(comment,'dummy') <> 'Not sent for migration - multiple customers with the same email address.') b2  -- excluding the problematic customer from the batch
-                  ON b2.customer_id = cc.outbound_id
        , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
                       (obj.value -> 'price' -> 'net' ->> 'amount')::INT AS item_net_unit_price_amount
                   FROM jsonb_array_elements(ci.items_added) obj(value)) items_added
@@ -83,28 +107,6 @@ WITH discounts_in_eur_amount AS (
              LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
                        ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
     WHERE cc.contact ->> 'email' NOT LIKE '%vimcar.com'
---                       AND cc.outbound_id = 'K10711749'  -- monthly billing cycles (good for testing)
---                       AND cc.outbound_id = 'K65597398' -- annual billing cycles (good for testing)
---                         AND cc.outbound_id = 'K45828570' -- annual billing cycles, 3-years contract (good for testing)
---                         AND cc.outbound_id = 'K67710870' -- there is no cancellation date for contract V74285730, must be populated in SQL
---                         and cc.outbound_id = 'K91452842' -- there is a discount 10% ot the contract level but coupon is missing, dummy must be created
---                             AND cc.outbound_id = '72006772' -- the calculated contract term end date should be 17 Nov'21
---       AND cc.outbound_id = 'K78533247' -- customer has 1 product only and had a price increase in January 2022
---       and cc.outbound_id = 'K91544902' -- this one has 2 the same products invoices, therefore must have item_quantity = 2 (and not 1 as it was before 2022-05-05
---       AND cc.outbound_id = 'K91789534' -- customer has multiple products, 2 of them will get a price increase on 16 April'22
---     AND cc.outbound_id = 'K48177636' -- 3y contract, monthly billing, started in Oct'2019
---     AND cc.outbound_id = '79325532'-- 1y contract, yearly billing, started in 2017, PRICE INCREASE!
---       AND cc.outbound_id = 'K17650370'-- 1y contract, yearly billing, started in 2021, no price increase, PRORATED
---     AND cc.outbound_id = 'K24405027' -- 1y, monthly billing Geo, no price increase, started in Jan'2020
---       AND cc.outbound_id = 'K17109555' -- 3y contract, monthly billing, started in Oct'2021, multiple products, not prorated
---     AND cc.outbound_id = 'K41608077' -- prorated, multiple items (SLACK https://vimcar.slack.com/archives/C03FZHZ16MP/p1655296704949729)
---       AND cc.outbound_id = 'K52069358' -- 3y subscription, started in Sep'2019, good for checking what happens after 3 years
---       AND cc.outbound_id = 'K67416935' -- customer cancelled the 3y subscription within 100d, good for contract end checks
---     AND cc.outbound_id = 'K29745758' -- simple logbook customer, upsell +1 license in Apr'22 (now he has 2)
---       AND cc.outbound_id = 'K77776393'  -- simple logbook customer, 2 items, PRICE INCREASE in Apr'22
---       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
---       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
---      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
     GROUP BY ci.contract_outbound_id, pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment
 )
 --    SELECT * FROM cte_invoice_product;   ----- TESTING
@@ -253,7 +255,7 @@ WITH discounts_in_eur_amount AS (
     FROM unique_subscriptions s
              JOIN public.contract c
                   ON s.shop_contract_id = c.outbound_id
-             JOIN public.customer cu
+             JOIN cte_customer cu
                   ON cu.id = c.customer_id
              LEFT JOIN discounts_in_eur_amount d
                        ON d.contract_outbound_id = s.shop_contract_id
@@ -852,6 +854,8 @@ WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
 
 
 
+
+----- INVOICES -------------------------------------------------------
 
 WITH invoice_payment AS (
     SELECT DISTINCT
