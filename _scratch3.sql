@@ -32,7 +32,7 @@ WHERE TRUE
 --       AND cc.outbound_id = 'K48062619' -- good for price increase investigation (logbook 1 and 3 years)
 --       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
 --      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
-AND cc.outbound_id = 'K10607246'
+-- AND cc.outbound_id = 'K10607246' -- good for price increase investigation (b2c logbook replaced by fleet logbook)
 )
 , discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
@@ -374,10 +374,10 @@ AND cc.outbound_id = 'K10607246'
          , "subscription[plan_unit_price]"
          -- STATUS MAPPING: https://www.notion.so/vimcar/Migration-Review-Learnings-Decisions-To-Dos-f32758b58cb54d3e8a026b7821d0632f
          , CASE
-               WHEN "subscription[current_term_end]" + INTERVAL '14 days' < current_date
-                   THEN 'cancelled'
+--                WHEN "subscription[current_term_end]" + INTERVAL '14 days' < current_date
+--                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
-                   AND "subscription[plan_quantity]"  < 1
+                   AND "subscription[plan_quantity]" < 1
                    AND "contract term end" < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
@@ -758,6 +758,13 @@ AND cc.outbound_id = 'K10607246'
          , s4."shipping_address[zip]"
          , s4."shipping_address[country]"
          , s4."shipping_address[validation_status]"
+         , CASE
+               WHEN s."subscription[status]" = 'cancelled'
+                   AND s."subscription[plan_quantity]" IS NULL
+                   AND (array_agg(s."subscription[status]") OVER (PARTITION BY s."subscription[cf_vertragsnummer]")) && '{"active", "future", "non_renewing"}' -- if the entire contract has any of these statuses
+                   THEN TRUE
+               ELSE FALSE
+        END AS exclusion_flag
     FROM subscriptions_7 s
              JOIN subscriptions_4 s4
                   ON s."subscription[id]" = s4."subscription[id]"
@@ -846,6 +853,7 @@ SELECT
      , NULL AS "subscription[cf_to_be_returned_devices_for_subscription]"
 FROM subscriptions_8
 WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
+    AND exclusion_flag IS FALSE
 --and shop_customer_id = 'K41608077'
 -- As agreed with Anne and CB on 20220110 we stop sending hardware plans for migration, therefore the 2 lines below are obsolete
 --UNION ALL

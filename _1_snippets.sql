@@ -565,6 +565,43 @@ FROM dwh_main.dim_principal p
                    ON m.foxbox_main_domain = p.main_domain_name
          LEFT JOIN cte_main_domain_items i
                    ON i.main_domain_foxbox = p.main_domain_name
-WHERE email IN ('till.kueken@grenzlaeufer-ev.de')
+WHERE email IN ('till.kueken@grenzlaeufer-ev.de');
+
+
+-- All customers with the same email domain:
+WITH cte_email_domains AS (
+    SELECT
+        split_part(customer_contact_email, '@', 2) AS email_domain
+         , customer_contact_email
+         , customer_status
+         , CASE
+               WHEN customer_id_chargebee IS NOT NULL
+                   THEN TRUE
+               ELSE FALSE
+        END AS customer_is_in_chargebee
+         , customer_id_shop
+         , customer_id_chargebee
+         , customer_is_fleet
+    FROM dwh_main.dim_combined_customer
+    WHERE customer_contact_email NOT LIKE '%@vodafone.de'
+      AND customer_contact_email NOT LIKE '%@web.de'
+      AND customer_contact_email NOT LIKE '%@gmail.com'
+)
+   , cte_fleet_email_domains AS (
+    SELECT
+        email_domain
+         , true = ANY(ARRAY_AGG(customer_is_fleet)) AS email_domain_is_fleet
+    FROM cte_email_domains
+    GROUP BY 1
+)
+SELECT e.*
+FROM cte_email_domains e
+         JOIN cte_fleet_email_domains f
+              ON e.email_domain = f.email_domain
+WHERE f.email_domain_is_fleet IS TRUE
+ORDER BY 1
+;
+SELECT * FROM dwh_main.umd_product_map WHERE product_uuid = 'e638a5fa-816b-4645-bad6-f0409c3ce7af'
+;
 
 
