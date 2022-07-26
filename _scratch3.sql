@@ -33,6 +33,7 @@ WHERE TRUE
 --       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
 --      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
 -- AND cc.outbound_id = 'K10607246' -- good for price increase investigation (b2c logbook replaced by fleet logbook)
+    and cc.outbound_id = '76892354'
 )
 , discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
