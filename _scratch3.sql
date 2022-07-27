@@ -1,4 +1,4 @@
--- sub_contracts SOLUTION FOR DATES 2022-07-18
+-- sub_contracts SOLUTION FOR DATES 2022-07-27
 WITH cte_customer AS (
 SELECT cc.*
 FROM customer cc
@@ -33,7 +33,7 @@ WHERE TRUE
 --       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
 --      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
 -- AND cc.outbound_id = 'K10607246' -- good for price increase investigation (b2c logbook replaced by fleet logbook)
-    and cc.outbound_id = '76892354'
+    and cc.outbound_id = 'K65418980'
 )
 , discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
@@ -381,6 +381,9 @@ WHERE TRUE
                    AND "subscription[plan_quantity]" < 1
                    AND "contract term end" < current_date
                    THEN 'cancelled'
+--                WHEN "subscription[status]" = 'active'
+--                    AND "contract term end" < current_date - INTERVAL '30 days'
+--                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
                    AND "subscription[plan_quantity]" < 1
                    THEN 'cancelled'
@@ -695,7 +698,7 @@ WHERE TRUE
          , CASE WHEN "subscription[status]" = 'active' THEN "contract_term[created_at]" END                                     AS "contract_term[created_at]"
          , "subscription[cancelled_at]"
          , CASE WHEN "subscription[status]" = 'active' THEN billing_cycles END                                                  AS billing_cycles
-         , CASE WHEN "subscription[status]" = 'active' THEN "contract_term[billing_cycle]" END                                  AS "contract_term[billing_cycle]"
+         , CASE WHEN "subscription[status]" IN ('active', 'future') THEN "contract_term[billing_cycle]" END                     AS "contract_term[billing_cycle]"
          , CASE
                WHEN "subscription[status]" IN ('active', 'future')
                    THEN "subscription[contract_term_billing_cycle_on_renewal]"
@@ -854,10 +857,35 @@ SELECT
      , NULL AS "subscription[cf_to_be_returned_devices_for_subscription]"
 FROM subscriptions_8
 WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
-    AND exclusion_flag IS FALSE
+    AND "subscription[plan_id]" <> 'addons-plan'
+--     AND exclusion_flag IS FALSE
 --and shop_customer_id = 'K41608077'
 -- As agreed with Anne and CB on 20220110 we stop sending hardware plans for migration, therefore the 2 lines below are obsolete
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_6 WHERE "subscription[plan_id]" LIKE 'hardware%'
 ;
 
+SELECT * FROM contract WHERE outbound_id = 'V22889568';
+
+SELECT
+    cco.outbound_id::VARCHAR(9) AS shop_contract_id
+     , pmap.product_uuid
+     , pmap.cb_plan_id_unified_map AS plan_id
+     , cbmap.cb_plan_id_map
+     , cbmap.cb_plan_id_map_nbr
+     , pmap.cb_addon_id
+     , MAX(pmap.cb_addon_price_net) AS cb_addon_price_net
+     , pmap.monthly_payment
+     , MAX(item_net_unit_price_amount) AS unit_price_net
+     , SUM(item_quantity) AS item_quantity
+FROM public.contract cco
+   , LATERAL (SELECT (obj.value ->> 'product_id') AS product_id,
+                  (obj.value -> 'price' -> 'net' ->> 'amount')::INT AS item_net_unit_price_amount,
+                  (obj.value ->> 'quantity')::SMALLINT AS item_quantity
+              FROM jsonb_array_elements(cco.items) obj(value)) items
+         JOIN mapping.umd_product_map pmap
+              ON pmap.product_uuid = CASE items.product_id WHEN 'fake' THEN '00000000-0000-0000-0000-000000000000' ELSE items.product_id END::UUID
+         LEFT JOIN public.shop_extraction_cb_plan_id_map cbmap
+                   ON pmap.cb_plan_id_unified_map = cbmap.cb_plan_id
+WHERE cco.outbound_id = 'V22889568'
+GROUP BY cco.outbound_id::VARCHAR(9), pmap.product_uuid, pmap.cb_plan_id_unified_map, cbmap.cb_plan_id_map, cbmap.cb_plan_id_map_nbr, pmap.cb_addon_id, pmap.monthly_payment;

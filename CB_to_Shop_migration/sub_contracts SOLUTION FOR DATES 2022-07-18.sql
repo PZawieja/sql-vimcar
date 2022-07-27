@@ -1,4 +1,20 @@
--- sub_contracts SOLUTION FOR DATES 2022-07-18
+SELECT batch_definition
+     , count(DISTINCT customer_id) FILTER ( WHERE set_is_pending_migration is FALSE ) AS to_be_migrated
+     , count(DISTINCT customer_id) FILTER ( WHERE set_is_pending_migration is TRUE AND set_is_migrated is FALSE ) AS in_pending_migration_status
+     , count(DISTINCT customer_id) FILTER ( WHERE set_is_migrated is TRUE ) AS migrated
+     , count(DISTINCT customer_id) FILTER ( WHERE set_is_migrated is TRUE AND set_is_pending_migration is FALSE) AS errors
+FROM shop_extraction_batch
+WHERE 1=1
+--  AND batch_definition = 'G1: sample customers who experienced the price increase action'
+GROUP BY 1
+ORDER BY 1;
+
+SELECT * FROM shop_extraction_batch WHERE set_is_pending_migration is FALSE AND set_is_migrated is TRUE
+
+------------------------------------------------------------------------------------------------------------------------------------------
+
+
+-- sub_contracts SOLUTION FOR DATES 2022-07-27
 WITH cte_customer AS (
     SELECT cc.*
     FROM customer cc
@@ -10,7 +26,7 @@ WITH cte_customer AS (
                    WHERE coalesce(comment,'dummy') <> 'Not sent for migration - multiple customers with the same email address.') b2  -- excluding the problematic customer from the batch
                   ON b2.customer_id = cc.outbound_id
     WHERE TRUE
-    --                       AND cc.outbound_id = 'K10711749'  -- monthly billing cycles (good for testing)
+      --                       AND cc.outbound_id = 'K10711749'  -- monthly billing cycles (good for testing)
 --                       AND cc.outbound_id = 'K65597398' -- annual billing cycles (good for testing)
 --                         AND cc.outbound_id = 'K45828570' -- annual billing cycles, 3-years contract (good for testing)
 --                         AND cc.outbound_id = 'K67710870' -- there is no cancellation date for contract V74285730, must be populated in SQL
@@ -33,6 +49,7 @@ WITH cte_customer AS (
 --       AND cc.outbound_id = 'K86580169' -- good for price increase investigation (Pro)
 --      AND cc.outbound_id = 'K40873533' -- good for price increase and checking the item quantity
 -- AND cc.outbound_id = 'K10607246' -- good for price increase investigation (b2c logbook replaced by fleet logbook)
+      and cc.outbound_id = 'K82443678'
 )
    , discounts_in_eur_amount AS (
     SELECT DISTINCT ON (contract_outbound_id)
@@ -381,6 +398,9 @@ WITH cte_customer AS (
                    AND "contract term end" < current_date
                    THEN 'cancelled'
                WHEN "subscription[status]" = 'active'
+                   AND "contract term end" < current_date - INTERVAL '30 days'
+                   THEN 'cancelled'
+               WHEN "subscription[status]" = 'active'
                    AND "subscription[plan_quantity]" < 1
                    THEN 'cancelled'
                WHEN "subscription[started_at]" > current_date
@@ -694,7 +714,7 @@ WITH cte_customer AS (
          , CASE WHEN "subscription[status]" = 'active' THEN "contract_term[created_at]" END                                     AS "contract_term[created_at]"
          , "subscription[cancelled_at]"
          , CASE WHEN "subscription[status]" = 'active' THEN billing_cycles END                                                  AS billing_cycles
-         , CASE WHEN "subscription[status]" = 'active' THEN "contract_term[billing_cycle]" END                                  AS "contract_term[billing_cycle]"
+         , CASE WHEN "subscription[status]" IN ('active', 'future') THEN "contract_term[billing_cycle]" END                     AS "contract_term[billing_cycle]"
          , CASE
                WHEN "subscription[status]" IN ('active', 'future')
                    THEN "subscription[contract_term_billing_cycle_on_renewal]"
@@ -853,12 +873,16 @@ SELECT
      , NULL AS "subscription[cf_to_be_returned_devices_for_subscription]"
 FROM subscriptions_8
 WHERE "subscription[plan_id]" NOT LIKE 'hardware%'
+  AND "subscription[plan_id]" <> 'addons-plan'
   AND exclusion_flag IS FALSE
 --and shop_customer_id = 'K41608077'
 -- As agreed with Anne and CB on 20220110 we stop sending hardware plans for migration, therefore the 2 lines below are obsolete
 --UNION ALL
 --SELECT DISTINCT * FROM subscriptions_6 WHERE "subscription[plan_id]" LIKE 'hardware%'
 ;
+
+
+
 
 
 
